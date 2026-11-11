@@ -53,6 +53,14 @@ fun routeMatches(dest: String, nav: String): Boolean {
 
 fun display(route: String) = route.replace(WILD, '*')
 
+/** Parses an XML file, or records it as unresolved and returns null. */
+fun readXml(p: Project, g: Graph, rel: String, kind: String): Element? = try {
+    secureXml(p.read(rel))
+} catch (e: Exception) {
+    g.addUnresolved(kind, rel, rel, null, "skipped: ${e.message?.take(80) ?: "invalid XML"}")
+    null
+}
+
 /** XML parsing with DOCTYPE (and so entity expansion) refused. */
 fun secureXml(text: String): Element? {
     val f = DocumentBuilderFactory.newInstance()
@@ -122,7 +130,8 @@ class NavScan(private val p: Project, private val g: Graph) {
             typeDests[fq] = nid
             if (d != null && ds != null) nodeForClass(g, d, ds, "nav_route")
         } else {
-            val arg = call.valueArguments.arg("route", 0) ?: return
+            // navigation(startDestination, route) takes the route second.
+            val arg = call.valueArguments.arg("route", if (name == "navigation") 1 else 0) ?: return
             val v = p.eval.eval(arg.getArgumentExpression())
             if (v !is String) {
                 if (name in setOf("composable", "dialog", "navigation")) {
@@ -162,31 +171,30 @@ class NavScan(private val p: Project, private val g: Graph) {
     }
 
     // ----- XML graphs -----
+    /** An action or start destination in an XML graph: [from] (a destination id) to the XML id [target]. */
+    private class XmlLink(val rel: String, val from: String?, val action: String?, val target: String)
+
     private fun xmlGraphs() {
+        val actions = ArrayList<XmlLink>()
+        val starts = ArrayList<XmlLink>()
         for (rel in p.navXmlPaths) {
-            val root = try {
-                secureXml(p.read(rel))
-            } catch (e: Exception) {
-                g.addUnresolved("nav_xml", rel, rel, null, "skipped: ${e.message?.take(80) ?: "invalid XML"}")
-                null
-            } ?: continue
+            val root = readXml(p, g, rel, "nav_xml") ?: continue
             if (root.localName != "navigation" && root.tagName != "navigation") continue
-            val actions = ArrayList<List<String?>>()
-            val starts = ArrayList<Pair<String, String>>()
             xmlElement(root, rel, p.moduleOf(rel), actions, starts)
-            for ((src, aid, target) in actions) {
-                val tid = xmlIds[target] ?: destId("@id/$target").also {
-                    g.addNode(it, "nav_destination", "@id/$target", rel, null, null,
-                        mapOf("route" to "@id/$target", "style" to "xml", "api" to "xml", "registered" to false))
-                }
-                if (!aid.isNullOrEmpty()) xmlActions[aid] = tid
-                if (src != null) g.addEdge(src, tid, "navigates_to", rel, null, mapOf("action" to aid?.ifEmpty { null }))
-            }
-            for ((gid, target) in starts) xmlIds[target]?.let { g.addEdge(gid, it, "starts_at", rel) }
         }
+        // Linked once every file is read: an action can point into another graph file (<include>).
+        for (a in actions) {
+            val tid = xmlIds[a.target] ?: destId("@id/${a.target}").also {
+                g.addNode(it, "nav_destination", "@id/${a.target}", a.rel, null, null,
+                    mapOf("route" to "@id/${a.target}", "style" to "xml", "api" to "xml", "registered" to false))
+            }
+            if (!a.action.isNullOrEmpty()) xmlActions[a.action] = tid
+            if (a.from != null) g.addEdge(a.from, tid, "navigates_to", a.rel, null, mapOf("action" to a.action?.ifEmpty { null }))
+        }
+        for (s in starts) xmlIds[s.target]?.let { g.addEdge(s.from!!, it, "starts_at", s.rel) }
     }
 
-    private fun xmlElement(el: Element, rel: String, module: String?, actions: MutableList<List<String?>>, starts: MutableList<Pair<String, String>>) {
+    private fun xmlElement(el: Element, rel: String, module: String?, actions: MutableList<XmlLink>, starts: MutableList<XmlLink>) {
         val raw = el.attr(ANDROID_NS, "id")
         var nid: String? = null
         if (raw != null) {
@@ -201,11 +209,11 @@ class NavScan(private val p: Project, private val g: Graph) {
             if (name != null && name in p.index.types) g.addEdge(nid, classId(name), "shows", rel)
         }
         val start = el.attr(APP_NS, "startDestination")
-        if (start != null && nid != null) starts.add(nid to start.substringAfter('/'))
+        if (start != null && nid != null) starts.add(XmlLink(rel, nid, null, start.substringAfter('/')))
         for (child in el.childElements()) {
             if (child.localName == "action") {
                 val target = child.attr(APP_NS, "destination") ?: continue
-                actions.add(listOf(nid, child.attr(ANDROID_NS, "id")?.substringAfter('/'), target.substringAfter('/')))
+                actions.add(XmlLink(rel, nid, child.attr(ANDROID_NS, "id")?.substringAfter('/'), target.substringAfter('/')))
             } else {
                 xmlElement(child, rel, module, actions, starts)
             }
@@ -324,6 +332,10 @@ class NavScan(private val p: Project, private val g: Graph) {
         for (c in s.file.collectDescendantsOfType<KtCallExpression> { it.calleeName() in BACKSTACK_STARTS }) {
             c.valueArguments.arg(null, 0)?.let { args.add(it to c) }
         }
+        // NavHost(navController, "home"): the start destination passed by position (named ones are found above).
+        for (c in s.file.collectDescendantsOfType<KtCallExpression> { it.calleeName() == "NavHost" }) {
+            c.valueArguments.arg("startDestination", 1)?.takeIf { it.name() == null }?.let { args.add(it to c) }
+        }
         for ((a, at) in args) {
             val (nid, _) = target(s, a.getArgumentExpression())
             val src = fnNode(s, at)
@@ -331,7 +343,7 @@ class NavScan(private val p: Project, private val g: Graph) {
         }
         for ((nid, call) in pendingStarts) {
             if (call.containingFile != s.file) continue
-            val a = call.valueArguments.arg("startDestination") ?: continue
+            val a = call.valueArguments.arg("startDestination", 0) ?: continue
             val (tid, _) = target(s, a.getArgumentExpression())
             if (tid != null) g.addEdge(nid, tid, "starts_at", s.path, s.line(call))
         }

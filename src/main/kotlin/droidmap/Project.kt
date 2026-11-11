@@ -22,10 +22,9 @@ import java.nio.file.SimpleFileVisitor
 import java.nio.file.attribute.BasicFileAttributes
 import java.security.MessageDigest
 
-val SKIP_DIRS = setOf(
-    ".git", ".gradle", "build", ".idea", "node_modules", ".kotlin", "out", ".cxx", "droidmap-out",
-    "graphify-out", ".fleet", ".vscode", "__pycache__", ".venv", "venv", ".externalNativeBuild",
-)
+/** Directories never scanned (any directory whose name starts with "." is skipped too). */
+val SKIP_DIRS = setOf("build", "node_modules", "out", "droidmap-out", "graphify-out", "__pycache__", "venv")
+private val PACKAGE_NAMES = setOf("build", "out")
 const val MAX_FILE_BYTES = 2_000_000L
 const val CONFIG_NAME = ".droidmap.toml"
 
@@ -176,7 +175,9 @@ class Project(root: Path, config: Config? = null) {
             override fun preVisitDirectory(dir: Path, attrs: BasicFileAttributes): FileVisitResult {
                 if (dir == this@Project.root) return FileVisitResult.CONTINUE
                 val name = dir.fileName.toString()
-                return if (name in SKIP_DIRS || name.startsWith(".")) FileVisitResult.SKIP_SUBTREE else FileVisitResult.CONTINUE
+                // Under src/, "build" and "out" are package names, not build output.
+                val inSources = name in PACKAGE_NAMES && this@Project.root.relativize(dir).any { it.toString() == "src" }
+                return if (name.startsWith(".") || (name in SKIP_DIRS && !inSources)) FileVisitResult.SKIP_SUBTREE else FileVisitResult.CONTINUE
             }
 
             override fun visitFile(file: Path, attrs: BasicFileAttributes): FileVisitResult {

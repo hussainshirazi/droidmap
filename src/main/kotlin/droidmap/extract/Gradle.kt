@@ -187,15 +187,15 @@ class GradleScan(private val p: Project, private val g: Graph) {
                 var j = k + 2
                 while (j < end && j < n) {
                     val tj = toks[j]
-                    if (tj.isId("alias") && j + 1 < end && toks[j + 1].isOp("(")) {
+                    val id = if (tj.isId("alias") && j + 1 < end && toks[j + 1].isOp("(")) {
                         val (parts, _) = chain(toks, j + 2)
-                        ids.add(pluginFromChain(parts) ?: ("alias:" + parts.joinToString(".")))
+                        pluginFromChain(parts) ?: ("alias:" + parts.joinToString("."))
                     } else if (tj.isId("id") && j + 1 < end) {
-                        val s = if (toks[j + 1].isOp("(") && j + 2 < end) toks[j + 2].plainString else toks[j + 1].plainString
-                        if (s != null) ids.add(s)
+                        if (toks[j + 1].isOp("(") && j + 2 < end) toks[j + 2].plainString else toks[j + 1].plainString
                     } else if (tj.isId("kotlin") && j + 2 < end && toks[j + 1].isOp("(")) {
-                        toks[j + 2].plainString?.let { ids.add("org.jetbrains.kotlin.$it") }
-                    }
+                        toks[j + 2].plainString?.let { "org.jetbrains.kotlin.$it" }
+                    } else null
+                    if (id != null && !declaredOnly(toks, j, end)) ids.add(id)
                     j++
                 }
             }
@@ -212,6 +212,19 @@ class GradleScan(private val p: Project, private val g: Graph) {
             }
         }
         return ids
+    }
+
+    /** `id("x") version "1" apply false` (on the same line as the entry at [j]) declares a plugin without applying it. */
+    private fun declaredOnly(toks: List<Tok>, j: Int, end: Int): Boolean {
+        var k = j + 1
+        while (k + 1 < end && toks[k].line == toks[j].line) {
+            if (toks[k].isId("apply")) {
+                val next = if (toks[k + 1].isOp("(") && k + 2 < end) toks[k + 2] else toks[k + 1]
+                return next.isId("false")
+            }
+            k++
+        }
+        return false
     }
 
     // ----- convention plugins -----

@@ -17,12 +17,15 @@ import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonPrimitive
+import org.jetbrains.kotlin.com.intellij.psi.PsiElement
 import org.jetbrains.kotlin.psi.KtCallExpression
 import org.jetbrains.kotlin.psi.KtClassOrObject
 import org.jetbrains.kotlin.psi.KtNameReferenceExpression
+import org.jetbrains.kotlin.psi.KtNamedDeclaration
 import org.jetbrains.kotlin.psi.KtNamedFunction
 import org.jetbrains.kotlin.psi.KtObjectDeclaration
 import org.jetbrains.kotlin.psi.KtProperty
+import org.jetbrains.kotlin.psi.KtQualifiedExpression
 import org.jetbrains.kotlin.psi.KtSuperTypeCallEntry
 import org.jetbrains.kotlin.psi.KtValueArgument
 import org.jetbrains.kotlin.psi.psiUtil.collectDescendantsOfType
@@ -164,7 +167,7 @@ class RoomScan(private val p: Project, private val g: Graph) {
     }
 
     private fun manualMigrations(s: Source) {
-        class Found(val args: List<KtValueArgument>, val at: org.jetbrains.kotlin.com.intellij.psi.PsiElement, val owner: KtClassOrObject?)
+        class Found(val args: List<KtValueArgument>, val at: PsiElement, val owner: KtClassOrObject?)
         val found = ArrayList<Found>()
         for (c in s.file.collectDescendantsOfType<KtClassOrObject>()) {
             for (entry in c.superTypeListEntries) {
@@ -181,9 +184,7 @@ class RoomScan(private val p: Project, private val g: Graph) {
         for (f in found) {
             val from = p.eval.evalInt(f.args.arg("startVersion", 0)?.getArgumentExpression())
             val to = p.eval.evalInt(f.args.arg("endVersion", 1)?.getArgumentExpression())
-            val prop = f.at.getStrictParentOfType<KtProperty>()
-            val named: org.jetbrains.kotlin.psi.KtNamedDeclaration? =
-                prop ?: f.owner?.takeUnless { it is KtObjectDeclaration && it.isObjectLiteral() }
+            val named = namedDeclaration(f.at, f.owner)
             val name = named?.name ?: "<anonymous>"
             val owner = named?.fqName?.asString() ?: "${s.pkg}.<anonymous>"
             val line = s.line(f.at)
@@ -195,9 +196,21 @@ class RoomScan(private val p: Project, private val g: Graph) {
             val mid = migrationId(db, from, to, name)
             g.addNode(mid, "room_migration", "$name $from->$to", s.path, line, s.module,
                 mapOf("db" to db, "from_version" to from, "to_version" to to, "style" to "manual", "name" to name, "owner" to owner))
-            manual.add(Manual(mid, name))
+            if (named != null) manual.add(Manual(mid, name)) // one passed inline is used where it is written
             if (db != null) g.addEdge(mid, classId(db), "migrates", s.path, line)
         }
+    }
+
+    /**
+     * The class, object or property that names a migration: `object M : Migration(1, 2)` or
+     * `val M = Migration(1, 2) {...}`. Null when it is written inline, as in addMigrations(object : Migration(1, 2) {...}).
+     */
+    private fun namedDeclaration(at: PsiElement, owner: KtClassOrObject?): KtNamedDeclaration? {
+        if (owner != null && !(owner is KtObjectDeclaration && owner.isObjectLiteral())) return owner
+        val expr = owner?.parent ?: at // the object literal expression, or the Migration(...) call
+        val prop = expr.getStrictParentOfType<KtProperty>() ?: return null
+        val init = prop.initializer
+        return prop.takeIf { init == expr || (init as? KtQualifiedExpression)?.selectorExpression == expr }
     }
 
     /** How often each manual migration's name is used (0 = never passed to addMigrations). */

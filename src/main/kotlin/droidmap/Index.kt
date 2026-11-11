@@ -181,12 +181,12 @@ class Index(val sources: List<Source>) {
         return null
     }
 
-    /** A local val/var with this name in a function that encloses [at]. */
+    /** The nearest local val/var with this name declared before [at] in a function that encloses it. */
     fun local(name: String, at: PsiElement): KtProperty? {
         var fn = at.getStrictParentOfType<KtNamedFunction>()
         while (fn != null) {
-            val hits = fn.collectDescendantsOfType<KtProperty> { it.isLocal && it.name == name }
-            if (hits.isNotEmpty()) return hits.lastOrNull { it.textOffset < at.textOffset } ?: hits.last()
+            fn.collectDescendantsOfType<KtProperty> { it.isLocal && it.name == name && it.textOffset < at.textOffset }
+                .lastOrNull()?.let { return it }
             fn = fn.getStrictParentOfType()
         }
         return null
@@ -274,6 +274,7 @@ class Evaluator(private val index: Index) {
         val src = index.sourceOf(at) ?: return null
         val d: KtCallableDeclaration? = (if ('.' !in chain) index.local(chain, at) else null) ?: index.resolveMember(chain, src, at)
         val p = d as? KtProperty ?: return null
+        if (p.isVar) return null // may be reassigned: not a constant
         val init = p.initializer ?: return null
         return memoized(p, depth) { eval(init, depth + 1) }
     }

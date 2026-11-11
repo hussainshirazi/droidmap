@@ -22,12 +22,7 @@ class ManifestScan(private val p: Project, private val g: Graph) {
 
     fun run() {
         for (rel in p.manifestPaths) {
-            val root = try {
-                secureXml(p.read(rel))
-            } catch (e: Exception) {
-                g.addUnresolved("manifest", rel, rel, null, "skipped: ${e.message?.take(80) ?: "invalid XML"}")
-                null
-            } ?: continue
+            val root = readXml(p, g, rel, "manifest") ?: continue
             val module = p.moduleOf(rel) ?: continue
             if (module.startsWith("[")) continue
             val ss = sourceSetOf(rel)

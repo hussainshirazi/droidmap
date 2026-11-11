@@ -24,6 +24,9 @@ private val USAGE = """
       mcp    [path]                                run as an MCP server over stdio
 
     Common options: --config FILE (default <path>/.droidmap.toml), --graph FILE (use a saved graph.json)
+
+    Exit codes: 0 done, 1 findings at --fail-on or above (check) or no match (find),
+    2 usage error, 3 internal error.
 """.trimIndent()
 
 class UsageError(message: String) : Exception(message)
@@ -74,8 +77,13 @@ class Cli(private val out: PrintStream = System.out, private val err: PrintStrea
 
     private fun load(root: Path, a: Args): Pair<Graph, Config> {
         val cfg = config(root, a)
-        val saved = a.opt("--graph")
-        return (if (saved != null) Graph.load(Path.of(saved)) else buildGraph(root, cfg).first) to cfg
+        val saved = a.opt("--graph") ?: return buildGraph(root, cfg).first to cfg
+        val g = try {
+            Graph.load(Path.of(saved))
+        } catch (e: Exception) {
+            throw UsageError("cannot read the graph $saved: ${e.message ?: e}")
+        }
+        return g to cfg
     }
 
     private fun pick(g: Graph, text: String): Node? {
@@ -192,15 +200,22 @@ class Cli(private val out: PrintStream = System.out, private val err: PrintStrea
     }
 }
 
+/** Runs the CLI and turns errors into exit codes: 2 for a usage error, 3 for a bug (never 1, which means findings). */
+fun runMain(argv: List<String>, out: PrintStream = System.out, err: PrintStream = System.err): Int = try {
+    Cli(out, err).run(argv)
+} catch (e: UsageError) {
+    err.println("droidmap: ${e.message}")
+    err.println("Run `droidmap --help` for usage.")
+    2
+} catch (e: Exception) {
+    err.println("droidmap: internal error, please report it with the trace below")
+    e.printStackTrace(err)
+    3
+}
+
 fun main(argv: Array<String>) {
     System.setOut(PrintStream(FileOutputStream(FileDescriptor.out), true, Charsets.UTF_8))
-    val code = try {
-        Cli().run(argv.toList())
-    } catch (e: UsageError) {
-        System.err.println("droidmap: ${e.message}")
-        System.err.println("Run `droidmap --help` for usage.")
-        2
-    }
+    val code = runMain(argv.toList())
     System.out.flush()
     exitProcess(code)
 }
