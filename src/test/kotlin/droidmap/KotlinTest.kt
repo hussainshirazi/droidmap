@@ -90,4 +90,13 @@ class KotlinTest {
         Index(listOf(s))
         assertEquals("", s.pkg)
     }
+
+    @Test
+    fun readmeListsEveryKindAndRule() {
+        val readme = java.nio.file.Files.readString(java.nio.file.Path.of("README.md"))
+        fun listed(heading: String) = Regex("$heading: (.*)\\.").find(readme)!!.groupValues[1].split(", ").map { it.trim('`') }.toSet()
+        assertEquals(NODE_KINDS - "ref", listed("Node kinds"))
+        assertEquals(EDGE_KINDS, listed("Edge kinds"))
+        for (r in Rule.entries) assertTrue("| `${r.id}` | ${r.severity} |" in readme, "README's rules table misses ${r.id} (${r.severity})")
+    }
 }

@@ -9,8 +9,6 @@ import droidmap.extract.RoomScan
 import droidmap.extract.ViewModelUses
 import java.nio.file.Path
 
-const val VERSION = "0.1.0"
-
 /** A graph with the project and the parsed code it was built from. */
 class Built(val graph: Graph, val project: Project, val code: Code)
 
@@ -36,6 +34,7 @@ fun buildGraph(p: Project, base: String? = null, previous: Code? = null): Built 
         "navigation_xml" to p.navXmlPaths.size, "schema_json" to p.jsonPaths.size,
     )
     g.meta["skipped_large_files"] = p.skipped.sorted()
+    requireKnownKinds(g)
     return Built(g, p, code)
 }
 

@@ -25,7 +25,7 @@ inputs:
     description: Git ref to compare Room schema files with (room-schema-changed). `auto` uses a pull request's base branch, `none` turns it off; another ref must already be fetched.
     default: auto
   version:
-    description: The droidmap release to use, such as 0.1.0. By default, the release this action was pinned to (or the latest one).
+    description: The droidmap release to use, such as 0.2.0. By default, the release this action was pinned to (or the latest one).
     default: ""
   jar:
     description: Path to a droidmap.jar to use instead of downloading one.

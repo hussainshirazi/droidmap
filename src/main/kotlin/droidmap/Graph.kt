@@ -18,6 +18,21 @@ val KIND_RANK = mapOf(
     "room_entity" to 11, "room_dao" to 12, "room_database" to 13,
 )
 
+/** Every node kind (the README lists them; "ref" is a placeholder for a node only an edge names). */
+val NODE_KINDS = KIND_RANK.keys + setOf("module", "room_migration", "room_schema", "test", "nav_destination", "permission")
+
+/** Every edge kind; an edge means "source depends on target". */
+val EDGE_KINDS = setOf(
+    "depends_on", "contains_entity", "contains_dao", "queries", "writes", "has_schema", "migrates", "tests", "registers", "shows",
+    "navigates_to", "starts_at", "uses_viewmodel", "injects", "bound_by", "requires", "declared_in", "uses_permission", "declares",
+)
+
+/** Fails on a node or edge kind that is not in NODE_KINDS or EDGE_KINDS: a typo in an extractor. */
+fun requireKnownKinds(g: Graph) {
+    g.nodes.values.flatMap { it.roles + it.kind }.firstOrNull { it !in NODE_KINDS }?.let { error("unknown node kind $it") }
+    g.edges.firstOrNull { it.kind !in EDGE_KINDS }?.let { error("unknown edge kind ${it.kind}") }
+}
+
 class Node(
     val id: String,
     var kind: String,

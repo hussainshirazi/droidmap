@@ -6,7 +6,7 @@ plugins {
 }
 
 group = "droidmap"
-version = "0.1.0"
+version = "0.2.0"
 
 repositories {
     mavenCentral()
@@ -33,6 +33,20 @@ kotlin {
         jvmTarget.set(JvmTarget.JVM_17)
     }
 }
+
+// The version lives here only: the code gets it as droidmap.VERSION.
+val versionSource by tasks.registering {
+    val dir = layout.buildDirectory.dir("generated/version")
+    val v = project.version.toString()
+    inputs.property("version", v)
+    outputs.dir(dir)
+    doLast {
+        val file = dir.get().file("droidmap/Version.kt").asFile
+        file.parentFile.mkdirs()
+        file.writeText("package droidmap\n\nconst val VERSION = \"$v\"\n")
+    }
+}
+kotlin.sourceSets.main { kotlin.srcDir(versionSource) }
 
 application {
     mainClass.set("droidmap.MainKt")
