@@ -9,6 +9,7 @@ on:
 
 permissions:
   contents: write
+  pull-requests: write
 
 jobs:
   release:
@@ -34,12 +35,18 @@ jobs:
         run: |
           git tag -f v0 "$GITHUB_SHA"
           git push -f origin v0
+      # main takes changes through pull requests only, so the update goes to a branch and a pull request.
+      # (Creating it needs Settings > Actions > "Allow GitHub Actions to create and approve pull requests";
+      # without that, the job summary has the link to open it by hand.)
       - name: Point Homebrew and Scoop at this release
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           version="${GITHUB_REF_NAME#v}"
           sha=$(cut -d ' ' -f 1 build/libs/droidmap.jar.sha256)
+          branch="packages-$version"
           git fetch --no-tags --depth=1 origin main
-          git checkout -B main origin/main
+          git checkout -B "$branch" origin/main
           sed -i -E "s|download/v[0-9][^/]*/|download/v$version/|; s|^  version \".*\"|  version \"$version\"|; s|^  sha256 \".*\"|  sha256 \"$sha\"|" Formula/droidmap.rb
           jq --arg v "$version" --arg h "$sha" \
             '.version = $v | .hash = $h | .url = "https://github.com/hussainshirazi/droidmap/releases/download/v\($v)/droidmap.jar"' \
@@ -47,4 +54,10 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git commit -am "Point Homebrew and Scoop at droidmap $version"
-          git push origin main
+          git push -f origin "$branch"
+          title="Point Homebrew and Scoop at droidmap $version"
+          if ! gh pr create --base main --head "$branch" --title "$title" --body "Made by the release workflow for $GITHUB_REF_NAME."; then
+            link="https://github.com/$GITHUB_REPOSITORY/compare/main...$branch?expand=1"
+            echo "Open the pull request that updates Homebrew and Scoop: $link" >> "$GITHUB_STEP_SUMMARY"
+            echo "::notice::Open $link to update Homebrew and Scoop"
+          fi
