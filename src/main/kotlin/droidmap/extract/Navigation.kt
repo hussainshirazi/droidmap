@@ -25,6 +25,8 @@ import javax.xml.parsers.DocumentBuilderFactory
 private val DEST_CALLS = setOf("composable", "dialog", "navigation", "bottomSheet", "activity", "entry")
 private val START_ARGS = setOf("startDestination", "startKey", "startRoute")
 private val BACKSTACK_STARTS = setOf("rememberNavBackStack", "NavBackStack")
+/** XML elements with an android:id that are not destinations. */
+private val NOT_DESTINATIONS = setOf("action", "argument", "deepLink", "include")
 private val R_ID = Regex("""^(?:[\w.]+\.)?R\.id\.(\w+)$""")
 const val ANDROID_NS = "http://schemas.android.com/apk/res/android"
 const val APP_NS = "http://schemas.android.com/apk/res-auto"
@@ -205,11 +207,12 @@ class NavScan(private val p: Project, private val code: Code, private val g: Gra
             if (!a.action.isNullOrEmpty()) xmlActions[a.action] = tid
             if (a.from != null) g.addEdge(a.from, tid, "navigates_to", a.rel, null, mapOf("action" to a.action?.ifEmpty { null }))
         }
-        for (s in starts) xmlIds[s.target]?.let { g.addEdge(s.from!!, it, "starts_at", s.rel) }
+        // A root graph without an id has no node: its start destination is marked instead.
+        for (s in starts) xmlIds[s.target]?.let { if (s.from != null) g.addEdge(s.from, it, "starts_at", s.rel) else g.nodes.getValue(it).attrs["start"] = true }
     }
 
     private fun xmlElement(el: Element, rel: String, module: String?, actions: MutableList<XmlLink>, starts: MutableList<XmlLink>) {
-        val raw = el.attr(ANDROID_NS, "id")
+        val raw = el.attr(ANDROID_NS, "id")?.takeIf { el.localName !in NOT_DESTINATIONS }
         var nid: String? = null
         if (raw != null) {
             val key = raw.substringAfter('/')
@@ -223,7 +226,7 @@ class NavScan(private val p: Project, private val code: Code, private val g: Gra
             if (name != null && name in index.types) g.addEdge(nid, classId(name), "shows", rel)
         }
         val start = el.attr(APP_NS, "startDestination")
-        if (start != null && nid != null) starts.add(XmlLink(rel, nid, null, start.substringAfter('/')))
+        if (start != null) starts.add(XmlLink(rel, nid, null, start.substringAfter('/')))
         for (child in el.childElements()) {
             if (child.localName == "action") {
                 val target = child.attr(APP_NS, "destination") ?: continue

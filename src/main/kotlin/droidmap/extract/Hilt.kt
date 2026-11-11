@@ -28,6 +28,8 @@ class HiltScan(private val code: Code, private val g: Graph) {
     private fun isDiFile(s: Source) = s.importsFrom("dagger") || s.importsFrom("javax.inject") || s.importsFrom("jakarta.inject")
 
     fun run() {
+        // Dagger (and so Hilt) is in use when app code imports it; leftovers in tests alone do not count.
+        if (code.sources.none { !it.isTest && it.importsFrom("dagger") }) return
         val files = code.sources.filter(::isDiFile)
         for (s in files) for (t in s.types) {
             if (t.kind == TypeKind.ANNOTATION && t.anns.has("Qualifier")) t.name?.let { qualifiers.add(it) }

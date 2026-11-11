@@ -2,6 +2,7 @@ package droidmap
 
 import droidmap.extract.GradleScan
 import droidmap.extract.HiltScan
+import droidmap.extract.KoinScan
 import droidmap.extract.ManifestScan
 import droidmap.extract.NavScan
 import droidmap.extract.RoomScan
@@ -25,6 +26,7 @@ fun buildGraph(p: Project, base: String? = null, previous: Code? = null): Built 
     RoomScan(p, code, g, base).run()
     NavScan(p, code, g).run()
     HiltScan(code, g).run()
+    KoinScan(code, g).run()
     ViewModelUses(code, g).run() // after the DI scans, which mark the ViewModels
     ManifestScan(p, code, g).run()
     g.meta["tool"] = "droidmap"

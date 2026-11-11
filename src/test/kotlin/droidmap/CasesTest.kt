@@ -345,6 +345,26 @@ class CasesTest {
         assertEquals(listOf("nav.dest::@id/orphan"), f.filter { it.rule == "nav-unreachable" }.map { it.node })
     }
 
+    @Test
+    fun rootGraphStartsAndDeepLinkIds() {
+        val (_, f) = build(*app, "app/src/main/res/navigation/nav.xml" to """
+            <navigation $ns app:startDestination="@+id/home">
+              <fragment android:id="@+id/home" android:name="com.x.Home"/>
+              <fragment android:id="@+id/linked" android:name="com.x.Linked">
+                <deepLink android:id="@+id/link" app:uri="example://linked"/>
+              </fragment>
+            </navigation>""")
+        assertEquals(emptyList(), f.map { it.message })
+    }
+
+    @Test
+    fun columnNamesThatCannotBeReadAreNotCompared() {
+        val (_, f) = build(*roomProject("""
+            @Entity(tableName = "items")
+            data class Item(@PrimaryKey @ColumnInfo(name = BaseColumns._ID) val id: Long)"""))
+        assertEquals(emptyList(), f.filter { it.rule == "room-schema-stale" }.map { it.message })
+    }
+
     private fun javaApp(itemFields: String) = arrayOf(*app,
         "app/schemas/com.x.db.AppDatabase/2.json" to """
             {"formatVersion": 1, "database": {"version": 2, "identityHash": "a", "entities": [{"tableName": "items", "fields": [
@@ -492,5 +512,90 @@ class CasesTest {
         val (_, stale) = build(*javaApp("public String title;\n    public String note;\n    public int rating;"))
         val message = stale.single { it.rule == "room-schema-stale" }.message
         assertTrue("items.rating is new" in message && "items.title is now nullable" in message, message)
+    }
+
+    @Test
+    fun kotlinMultiplatformWithKoin() {
+        val (g, f) = build(
+            "settings.gradle.kts" to """include(":shared", ":testing", ":core", ":platform")""",
+            "shared/build.gradle.kts" to """
+                plugins { kotlin("multiplatform") }
+                kotlin {
+                    sourceSets {
+                        commonMain.dependencies { implementation(projects.core) }
+                        commonTest.dependencies { implementation(projects.testing) }
+                        val androidMain by getting {
+                            dependencies { implementation(project(":platform")) }
+                        }
+                    }
+                }""",
+            "testing/build.gradle.kts" to """
+                plugins { kotlin("multiplatform") }
+                kotlin { sourceSets { commonMain.dependencies { implementation(projects.shared) } } }""",
+            "core/build.gradle.kts" to """plugins { kotlin("multiplatform") }""",
+            "platform/build.gradle.kts" to """plugins { kotlin("multiplatform") }""",
+            "shared/src/commonMain/kotlin/com/x/data/Data.kt" to """
+                package com.x.data
+
+                expect class Platform()
+                interface ItemRepository
+                interface Store
+                class ItemStore(platform: Platform) : Store
+                class OfflineItemRepository(store: Store, platform: Platform) : ItemRepository
+                class Analytics
+                class HomeViewModel(items: ItemRepository) : ViewModel()
+                class DetailViewModel(analytics: Analytics) : ViewModel()""",
+            "shared/src/androidMain/kotlin/com/x/data/Platform.android.kt" to "package com.x.data\nactual class Platform actual constructor()",
+            "shared/src/iosMain/kotlin/com/x/data/Platform.ios.kt" to "package com.x.data\nactual class Platform actual constructor()",
+            "shared/src/commonMain/kotlin/com/x/di/Modules.kt" to """
+                package com.x.di
+                import com.x.data.DetailViewModel
+                import com.x.data.HomeViewModel
+                import com.x.data.ItemRepository
+                import com.x.data.ItemStore
+                import com.x.data.OfflineItemRepository
+                import com.x.data.Store
+                import org.koin.core.module.dsl.singleOf
+                import org.koin.core.module.dsl.viewModelOf
+                import org.koin.dsl.bind
+                import org.koin.dsl.module
+
+                val dataModule = module {
+                    single { Platform() }
+                    single<ItemRepository> { OfflineItemRepository(get(), get()) }
+                    singleOf(::ItemStore) bind Store::class
+                    viewModelOf(::HomeViewModel)
+                    factory { DetailViewModel(get()) }
+                }""",
+            "shared/src/commonMain/kotlin/com/x/data/Annotated.kt" to """
+                package com.x.data
+                import org.koin.core.annotation.KoinViewModel
+                import org.koin.core.annotation.Single
+
+                interface TimeSource
+                @Single class Clock : TimeSource
+                class Missing
+                @KoinViewModel class SettingsViewModel(time: TimeSource, missing: Missing) : ViewModel()""",
+            "shared/src/commonMain/kotlin/com/x/ui/Home.kt" to """
+                package com.x.ui
+                import com.x.data.HomeViewModel
+                import org.koin.compose.viewmodel.koinViewModel
+
+                @Composable fun HomeScreen() { val vm = koinViewModel<HomeViewModel>() }""")
+        // Source sets: commonTest is a test dependency (so shared -> testing -> shared is no cycle).
+        val deps = g.edges.filter { it.kind == "depends_on" }.associate { "${g.label(it.source)}->${g.label(it.target)}" to it.attrs }
+        assertEquals("commonMain", deps.getValue(":shared->:core").str("source_set"))
+        assertEquals(true to "commonTest", deps.getValue(":shared->:testing").let { it.bool("test") to it.str("source_set") })
+        assertEquals("androidMain", deps.getValue(":shared->:platform").str("source_set"))
+        // Koin: definitions bind their types, constructors' get() calls become injects edges, and the viewModel is used.
+        assertTrue(g.edge("bound_by", "ItemRepository", "dataModule.single ItemRepository"))
+        assertTrue(g.edge("requires", "dataModule.single ItemRepository", "OfflineItemRepository"))
+        assertTrue(g.edge("injects", "OfflineItemRepository", "Store") && g.edge("injects", "OfflineItemRepository", "Platform"))
+        assertTrue(g.edge("bound_by", "Store", "dataModule.single ItemStore") && g.edge("injects", "ItemStore", "Platform"))
+        assertTrue(g.edge("uses_viewmodel", "HomeScreen", "HomeViewModel") && g.edge("bound_by", "TimeSource", "Clock"))
+        // An expect class and its two actuals are one type, so Platform() resolves without an import.
+        assertTrue(g.edge("bound_by", "Platform", "dataModule.single Platform"))
+        assertEquals(listOf("koin-missing-definition Analytics", "koin-missing-definition Missing"),
+            f.map { "${it.rule} ${it.node?.substringAfterLast('.')}" }.sorted())
     }
 }

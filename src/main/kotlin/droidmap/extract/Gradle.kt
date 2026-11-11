@@ -32,7 +32,21 @@ private fun chain(toks: List<Tok>, start: Int): Pair<List<String>, Int> {
     return parts to k
 }
 
-class ProjectRef(val configuration: String, val path: String, val line: Int)
+/** A project dependency; [sourceSet] is the Kotlin Multiplatform source set block it is in (commonMain, iosTest, ...). */
+class ProjectRef(val configuration: String, val path: String, val line: Int, val sourceSet: String?)
+
+private val SOURCE_SET = Regex("[a-z][A-Za-z0-9]*(Main|Test)")
+
+/** The source set a block opened at [open] is for: commonMain.dependencies {, val iosTest by getting {, named("jvmMain") {. */
+private fun kmpSourceSet(toks: List<Tok>, open: Int): String? {
+    var j = open - 1
+    while (j >= 0 && toks[j].line == toks[open].line && !toks[j].isOp("{") && !toks[j].isOp("}")) {
+        val t = toks[j]
+        if ((t.kind == 'i' || t.kind == 's') && SOURCE_SET.matches(t.text)) return t.text
+        j--
+    }
+    return null
+}
 
 /** Gradle: modules from settings, module dependencies, plugins, and what convention plugins add. */
 class GradleScan(private val p: Project, private val g: Graph) {
@@ -127,8 +141,11 @@ class GradleScan(private val p: Project, private val g: Graph) {
     fun projectRefs(toks: List<Tok>, file: String?): List<ProjectRef> {
         val n = toks.size
         val out = ArrayList<ProjectRef>()
+        val blocks = ArrayList<String?>() // the source set of each open block, innermost last
         for (k in toks.indices) {
             val t = toks[k]
+            if (t.isOp("{")) blocks.add(kmpSourceSet(toks, k))
+            if (t.isOp("}")) blocks.removeLastOrNull()
             val afterDot = k > 0 && toks[k - 1].isOp(".")
             var path: String? = null
             if (t.isId("project") && k + 2 < n && toks[k + 1].isOp("(") && !afterDot) {
@@ -148,7 +165,7 @@ class GradleScan(private val p: Project, private val g: Graph) {
                     continue
                 }
             } else continue
-            out.add(ProjectRef(configuration(toks, k), path, t.line))
+            out.add(ProjectRef(configuration(toks, k), path, t.line, blocks.lastOrNull { it != null }))
         }
         return out
     }
@@ -293,18 +310,19 @@ class GradleScan(private val p: Project, private val g: Graph) {
             val toks = GradleLexer.lex(p.read(build))
             val plugins = appliedPlugins(toks)
             if (plugins.isNotEmpty()) g.nodes[moduleId(path)]!!.attrs["plugins"] = plugins
-            for (r in projectRefs(toks, build)) dep(path, r.path, r.configuration, null, build, r.line)
-            for (pid in plugins) for (a in expand(pid, HashSet())) {
-                dep(path, a.ref.path, a.ref.configuration, a.via, convention[a.via]!!.file, a.ref.line)
-            }
+            for (r in projectRefs(toks, build)) dep(path, r, null, build)
+            for (pid in plugins) for (a in expand(pid, HashSet())) dep(path, a.ref, a.via, convention[a.via]!!.file)
         }
     }
 
-    private fun dep(src: String, dst: String, conf: String, via: String?, file: String?, line: Int?) {
+    private fun dep(src: String, r: ProjectRef, via: String?, file: String?) {
+        val dst = r.path
         if (dst !in modules) {
-            g.addUnresolved("gradle_project", dst, file, line, "$src depends on a project not in settings")
+            g.addUnresolved("gradle_project", dst, file, r.line, "$src depends on a project not in settings")
             g.addNode(moduleId(dst), "module", dst, module = dst, attrs = mapOf("missing" to true))
         }
-        g.addEdge(moduleId(src), moduleId(dst), "depends_on", file, line, mapOf("configuration" to conf, "via" to via, "test" to flag("test" in conf.lowercase())))
+        val test = "test" in r.configuration.lowercase() || r.sourceSet?.endsWith("Test") == true
+        g.addEdge(moduleId(src), moduleId(dst), "depends_on", file, r.line,
+            mapOf("configuration" to r.configuration, "source_set" to r.sourceSet, "via" to via, "test" to flag(test)))
     }
 }

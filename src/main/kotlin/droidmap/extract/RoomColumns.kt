@@ -41,11 +41,12 @@ class RoomColumns(private val code: Code) {
                 val fieldNonNull = nonNull && !type.nullable
                 val embedded = f.anns.find("Embedded")
                 if (embedded != null) {
-                    val pre = code.eval.eval(embedded.args.arg("prefix", 0)?.expr) as? String
+                    val pre = embedded.args.arg("prefix", 0)?.let { code.eval.eval(it.expr) as? String ?: return false } ?: ""
                     val d = code.index.resolveType(type.name, t.src, t.psi) ?: return false
-                    if (!collect(d, prefix + (pre ?: ""), fieldNonNull, out, path)) return false
+                    if (!collect(d, prefix + pre, fieldNonNull, out, path)) return false
                 } else {
-                    val named = code.eval.eval(f.anns.find("ColumnInfo")?.args?.arg("name", 0)?.expr) as? String
+                    val nameArg = f.anns.find("ColumnInfo")?.args?.arg("name", 0)
+                    val named = nameArg?.let { code.eval.eval(it.expr) as? String ?: return false } // a name we cannot read (BaseColumns._ID)
                     val name = named?.takeIf { it != "[field-name]" } ?: f.name ?: return false
                     val plain = '.' !in type.name || type.name.startsWith("kotlin.")
                     out.add(Column(prefix + name, AFFINITY[type.simple]?.takeIf { plain && type.args.isEmpty() }, fieldNonNull))

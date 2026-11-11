@@ -204,7 +204,7 @@ class Cli(private val out: PrintStream = System.out, private val err: PrintStrea
                 0
             }
             "rules" -> {
-                RULES.forEach { (id, v) -> out.println("${id.padEnd(28)} ${v.first.padEnd(8)} ${v.second}") }
+                RULES.values.forEach { out.println("${it.id.padEnd(28)} ${it.severity.padEnd(8)} ${it.description}") }
                 0
             }
             "mcp" -> {

@@ -1,5 +1,7 @@
 package droidmap
 
+fun plural(n: Int, word: String) = if (n == 1) word else "${word}s"
+
 fun formatFindings(findings: List<Finding>): String {
     if (findings.isEmpty()) return "No findings."
     val lines = ArrayList<String>()
@@ -10,16 +12,16 @@ fun formatFindings(findings: List<Finding>): String {
     val counts = findings.groupingBy { it.severity }.eachCount()
     lines.add("")
     lines.add(listOf("error", "warning", "info").filter { (counts[it] ?: 0) > 0 }
-        .joinToString(", ") { "${counts[it]} $it${if (counts[it] != 1) "s" else ""}" })
+        .joinToString(", ") { "${counts[it]} ${plural(counts.getValue(it), it)}" })
     return lines.joinToString("\n")
 }
 
 /** SARIF 2.1.0 for GitHub code scanning; [prefix] is put before every file path (see `check --sarif`). */
 fun toSarif(findings: List<Finding>, prefix: String = ""): Map<String, Any?> {
     val level = mapOf("error" to "error", "warning" to "warning", "info" to "note")
-    val rules = RULES.map { (id, v) ->
-        linkedMapOf("id" to id, "shortDescription" to mapOf("text" to v.second),
-            "defaultConfiguration" to mapOf("level" to (if (v.first == "off") "none" else level[v.first] ?: "none")))
+    val rules = RULES.values.map { r ->
+        linkedMapOf("id" to r.id, "shortDescription" to mapOf("text" to r.description),
+            "defaultConfiguration" to mapOf("level" to (level[r.severity] ?: "none")))
     }
     val results = findings.map { f ->
         val r = linkedMapOf<String, Any?>("ruleId" to f.rule, "level" to (level[f.severity] ?: "note"), "message" to mapOf("text" to f.message))

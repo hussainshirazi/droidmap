@@ -1,27 +1,31 @@
 package droidmap
 
 /**
- * Rules that run over a built graph. Each finding names its rule, so it can be configured in
+ * The rules that run over a built graph. Each finding names its rule, so it can be configured in
  * .droidmap.toml ([rules] rule-id = "error" | "warning" | "info" | "off").
  */
-val RULES: Map<String, Pair<String, String>> = sortedMapOf(
-    "room-migration-path" to ("error" to "Every known schema version has a migration path to the current version"),
-    "room-schema-missing" to ("warning" to "Schema JSON is exported for the current version and every version before it"),
-    "room-schema-stale" to ("warning" to "The entities match the schema JSON of the database's current version (else the version was not bumped)"),
-    "room-schema-changed" to ("warning" to "With --base: no schema JSON of a version that existed there has changed (a shipped schema must never change)"),
-    "room-migration-untested" to ("warning" to "Every migration step is run by a MigrationTestHelper test"),
-    "room-migration-unused" to ("warning" to "Every manual Migration is used by app code (for example in addMigrations), not only by tests"),
-    "room-destructive-fallback" to ("warning" to "fallbackToDestructiveMigration deletes user data when a migration is missing"),
-    "room-insert-replace" to ("off" to "@Insert/@Upsert with OnConflictStrategy.REPLACE deletes and re-inserts rows"),
-    "nav-unknown-target" to ("error" to "navigate() to a route or key that no destination registers"),
-    "nav-unreachable" to ("warning" to "A destination that nothing navigates to, starts at, deep-links to, opens from a menu or references"),
-    "hilt-missing-binding" to ("warning" to "An injected project type with no @Inject constructor, @Provides or @Binds"),
-    "hilt-duplicate-binding" to ("error" to "The same type and qualifier is bound twice in one source set"),
-    "gradle-unknown-project" to ("error" to "A project dependency on a module that settings does not include"),
-    "gradle-forbidden-dependency" to ("error" to "A module dependency banned by a [[gradle.forbid]] rule"),
-    "gradle-cycle" to ("error" to "Modules that depend on each other in a cycle"),
-    "manifest-permission" to ("error" to "A permission that is not in [manifest] allowed_permissions"),
-)
+enum class Rule(val id: String, val severity: String, val description: String) {
+    ROOM_MIGRATION_PATH("room-migration-path", "error", "Every known schema version has a migration path to the current version"),
+    ROOM_SCHEMA_MISSING("room-schema-missing", "warning", "Schema JSON is exported for the current version and every version before it"),
+    ROOM_SCHEMA_STALE("room-schema-stale", "warning", "The entities match the schema JSON of the database's current version (else the version was not bumped)"),
+    ROOM_SCHEMA_CHANGED("room-schema-changed", "warning", "With --base: no schema JSON of a version that existed there has changed (a shipped schema must never change)"),
+    ROOM_MIGRATION_UNTESTED("room-migration-untested", "warning", "Every migration step is run by a MigrationTestHelper test"),
+    ROOM_MIGRATION_UNUSED("room-migration-unused", "warning", "Every manual Migration is used by app code (for example in addMigrations), not only by tests"),
+    ROOM_DESTRUCTIVE_FALLBACK("room-destructive-fallback", "warning", "fallbackToDestructiveMigration deletes user data when a migration is missing"),
+    ROOM_INSERT_REPLACE("room-insert-replace", "off", "@Insert/@Upsert with OnConflictStrategy.REPLACE deletes and re-inserts rows"),
+    NAV_UNKNOWN_TARGET("nav-unknown-target", "error", "navigate() to a route or key that no destination registers"),
+    NAV_UNREACHABLE("nav-unreachable", "warning", "A destination that nothing navigates to, starts at, deep-links to, opens from a menu or references"),
+    HILT_MISSING_BINDING("hilt-missing-binding", "warning", "An injected project type with no @Inject constructor, @Provides or @Binds"),
+    HILT_DUPLICATE_BINDING("hilt-duplicate-binding", "error", "The same type and qualifier is bound twice in one source set"),
+    KOIN_MISSING_DEFINITION("koin-missing-definition", "warning", "A type Koin is asked for (get(), inject(), koinInject()) that no Koin definition provides"),
+    GRADLE_UNKNOWN_PROJECT("gradle-unknown-project", "error", "A project dependency on a module that settings does not include"),
+    GRADLE_FORBIDDEN_DEPENDENCY("gradle-forbidden-dependency", "error", "A module dependency banned by a [[gradle.forbid]] rule"),
+    GRADLE_CYCLE("gradle-cycle", "error", "Modules that depend on each other in a cycle"),
+    MANIFEST_PERMISSION("manifest-permission", "error", "A permission that is not in [manifest] allowed_permissions"),
+}
+
+/** Rules by id, sorted. */
+val RULES: Map<String, Rule> = Rule.entries.associateBy { it.id }.toSortedMap()
 val SEVERITY_ORDER = mapOf("error" to 0, "warning" to 1, "info" to 2)
 
 data class Finding(val rule: String, var severity: String, val message: String, val file: String?, val line: Int?, val node: String?) {
@@ -29,11 +33,11 @@ data class Finding(val rule: String, var severity: String, val message: String, 
         "rule" to rule, "severity" to severity, "message" to message, "file" to file, "line" to line, "node" to node)
 }
 
-private fun finding(rule: String, message: String, file: String? = null, line: Int? = null, node: String? = null) =
-    Finding(rule, RULES.getValue(rule).first, message, file, line, node)
+private fun finding(rule: Rule, message: String, file: String? = null, line: Int? = null, node: String? = null) =
+    Finding(rule.id, rule.severity, message, file, line, node)
 
 fun runChecks(g: Graph, config: Config = Config()): List<Finding> {
-    val all = room(g) + nav(g) + hilt(g) + gradle(g, config) + manifest(g, config)
+    val all = room(g) + nav(g) + di(g) + gradle(g, config) + manifest(g, config)
     val out = ArrayList<Finding>()
     for (f in all) {
         val sev = config.severities[f.rule] ?: f.severity
@@ -44,7 +48,11 @@ fun runChecks(g: Graph, config: Config = Config()): List<Finding> {
     return out.sortedWith(compareBy<Finding>({ SEVERITY_ORDER[it.severity] ?: 9 }, { it.rule }, { it.file ?: "" }, { it.line ?: 0 }))
 }
 
-private fun plural(n: Int, word: String) = if (n == 1) word else "${word}s"
+/** How many unresolved items of [kind] there are, as a hint for a finding: " (3 navigate calls could not be resolved)". */
+private fun hint(g: Graph, kind: String, what: String): String {
+    val n = g.unresolved.count { it.kind == kind }
+    return if (n > 0) " ($n $what could not be resolved)" else ""
+}
 
 // ----- Room -----
 private fun room(g: Graph): List<Finding> {
@@ -64,7 +72,7 @@ private fun room(g: Graph): List<Finding> {
             version !in seen
         }
         if (stuck.isNotEmpty()) {
-            out.add(finding("room-migration-path",
+            out.add(finding(Rule.ROOM_MIGRATION_PATH,
                 "${db.label} is at version $version but there is no migration path from ${plural(stuck.size, "version")} " +
                     "${stuck.joinToString(", ")}: users on ${if (stuck.size > 1) "those versions" else "it"} hit " +
                     "IllegalStateException (or lose data with a destructive fallback)", db.file, db.line, db.id))
@@ -72,13 +80,13 @@ private fun room(g: Graph): List<Finding> {
         if (db.attrs["export_schema"] != false) {
             val have = schemas[fq] ?: emptySet()
             if (have.isEmpty()) {
-                out.add(finding("room-schema-missing",
+                out.add(finding(Rule.ROOM_SCHEMA_MISSING,
                     "${db.label} exports schemas but no <version>.json was found under a '$fq' folder: set " +
                         "room.schemaLocation (or the Room Gradle plugin's schemaDirectory) and commit the files", db.file, db.line, db.id))
             } else {
                 val missing = ((have + version).min()..version).filter { it !in have }
                 if (missing.isNotEmpty()) {
-                    out.add(finding("room-schema-missing",
+                    out.add(finding(Rule.ROOM_SCHEMA_MISSING,
                         "${db.label}: no schema JSON for ${plural(missing.size, "version")} ${missing.joinToString(", ")}" +
                             (if (version in missing) " (including the current version: build and commit it)" else ""),
                         db.file, db.line, db.id))
@@ -87,7 +95,7 @@ private fun room(g: Graph): List<Finding> {
         }
         val drift = db.attrs.strings("schema_drift")
         if (drift.isNotEmpty()) {
-            out.add(finding("room-schema-stale",
+            out.add(finding(Rule.ROOM_SCHEMA_STALE,
                 "${db.label}'s entities no longer match $version.json, the schema of its current version ($version): " +
                     "${drift.joinToString(", ")}. Bump the version and add a migration; if version $version has not " +
                     "shipped yet, rebuild to regenerate $version.json and commit it.", db.file, db.line, db.id))
@@ -96,14 +104,14 @@ private fun room(g: Graph): List<Finding> {
         if (untested.isNotEmpty()) {
             val steps = untested.map { it.attrs.int("from_version")!! to it.attrs.int("to_version")!! }
                 .sortedWith(compareBy({ it.first }, { it.second }))
-            out.add(finding("room-migration-untested",
+            out.add(finding(Rule.ROOM_MIGRATION_UNTESTED,
                 "${db.label}: ${untested.size} of ${migs.size} migration steps have no MigrationTestHelper test " +
                     "(${steps.joinToString(", ") { "${it.first}->${it.second}" }})", db.file, db.line, db.id))
         }
     }
     for (n in g.byKind("room_migration")) {
         if (n.attrs.str("style") == "manual" && n.attrs.int("references") == 0) {
-            out.add(finding("room-migration-unused",
+            out.add(finding(Rule.ROOM_MIGRATION_UNUSED,
                 "${n.attrs.str("name")} (${n.attrs.int("from_version")}->${n.attrs.int("to_version")}) is never used by app code " +
                     "(tests aside): is it passed to addMigrations()?", n.file, n.line, n.id))
         }
@@ -112,17 +120,17 @@ private fun room(g: Graph): List<Finding> {
         val before = s.attrs.str("base_identity_hash") ?: continue
         if (before == s.attrs.str("identity_hash")) continue
         val v = s.attrs.int("version")
-        out.add(finding("room-schema-changed",
+        out.add(finding(Rule.ROOM_SCHEMA_CHANGED,
             "${s.file} changed since ${g.meta["base"]}: the schema of version $v is different. If version $v has shipped, " +
                 "phones that have it crash on update (\"Room cannot verify the data integrity\"): bump the version and add " +
                 "a migration instead. If it has not shipped, this is expected.", s.file, null, s.id))
     }
     for (fb in g.meta.maps("room_destructive_fallback")) {
-        out.add(finding("room-destructive-fallback",
+        out.add(finding(Rule.ROOM_DESTRUCTIVE_FALLBACK,
             "${fb.str("call")}() deletes the user's database whenever a migration is missing", fb.str("file"), fb.int("line")))
     }
     for (e in g.edgesOf("writes")) for (r in e.attrs.maps("replace")) {
-        out.add(finding("room-insert-replace",
+        out.add(finding(Rule.ROOM_INSERT_REPLACE,
             "${r.str("function")} uses OnConflictStrategy.REPLACE, which deletes the old row (and cascades) instead of updating it",
             r.str("file") ?: e.file, r.int("line"), e.source))
     }
@@ -132,39 +140,43 @@ private fun room(g: Graph): List<Finding> {
 // ----- navigation -----
 private fun nav(g: Graph): List<Finding> {
     val out = ArrayList<Finding>()
-    val dynamic = g.unresolved.count { it.kind == "nav_target" }
     for (n in g.byKind("nav_destination")) {
         val incoming = g.inEdges(n.id)
         if (!n.attrs.bool("registered")) {
             for (e in incoming) if (e.kind == "navigates_to" || e.kind == "starts_at") {
-                out.add(finding("nav-unknown-target",
+                out.add(finding(Rule.NAV_UNKNOWN_TARGET,
                     "${g.label(e.source)} navigates to ${n.label}, but no destination registers it", e.file, e.line, n.id))
             }
             continue
         }
         val reached = incoming.any { it.kind == "navigates_to" || it.kind == "starts_at" }
-        val entered = n.attrs.bool("deep_link") || n.attrs.bool("menu_item") || (n.attrs.int("references") ?: 0) > 0
+        val entered = n.attrs.bool("deep_link") || n.attrs.bool("menu_item") || n.attrs.bool("start") || (n.attrs.int("references") ?: 0) > 0
         if (reached || entered || n.attrs.bool("graph")) continue
-        val hint = if (dynamic > 0) " ($dynamic navigate calls could not be resolved)" else ""
-        out.add(finding("nav-unreachable",
-            "Nothing navigates to ${n.label}: it is not a start destination, deep link or menu item, and nothing else refers to it$hint",
-            n.file, n.line, n.id))
+        out.add(finding(Rule.NAV_UNREACHABLE,
+            "Nothing navigates to ${n.label}: it is not a start destination, deep link or menu item, and nothing else refers to it" +
+                hint(g, "nav_target", "navigate calls"), n.file, n.line, n.id))
     }
     return out
 }
 
-// ----- Hilt -----
-private fun hilt(g: Graph): List<Finding> {
+// ----- Hilt and Koin -----
+private fun di(g: Graph): List<Finding> {
     val out = ArrayList<Finding>()
     for (e in g.edges) {
-        if (e.kind != "injects" && e.kind != "requires") continue
+        if ((e.kind != "injects" && e.kind != "requires") || e.attrs.bool("constructs")) continue // a Koin definition makes what it constructs
         val t = g.nodes[e.target] ?: continue
-        if (t.file == null) continue
+        if (t.file == null) continue // not a project class
         if (t.roles.any { it in setOf("injectable", "viewmodel", "hilt_module") } || t.attrs.bool("assisted_factory")) continue
         if (g.outEdges(t.id).any { it.kind == "bound_by" }) continue
-        out.add(finding("hilt-missing-binding",
-            "${g.label(e.source)} injects ${t.label}, but nothing binds it (no @Inject constructor, @Provides or @Binds in this project)",
-            e.file, e.line, t.id))
+        out.add(if (e.attrs.bool("koin")) {
+            finding(Rule.KOIN_MISSING_DEFINITION,
+                "${g.label(e.source)} gets ${t.label} from Koin, but no Koin definition provides it (NoDefinitionFoundException " +
+                    "at runtime)" + hint(g, "koin_definition", "Koin definitions"), e.file, e.line, t.id)
+        } else {
+            finding(Rule.HILT_MISSING_BINDING,
+                "${g.label(e.source)} injects ${t.label}, but nothing binds it (no @Inject constructor, @Provides or @Binds in this project)",
+                e.file, e.line, t.id)
+        })
     }
     val groups = LinkedHashMap<Pair<String, String?>, MutableList<Node>>()
     for (n in g.byKind("hilt_provider")) {
@@ -179,7 +191,7 @@ private fun hilt(g: Graph): List<Finding> {
         val clash = sets.values.filter { it.size > 1 }.toMutableList()
         if ("main" in sets && sets.size > 1) clash.add(ns)
         for (c in clash) {
-            out.add(finding("hilt-duplicate-binding",
+            out.add(finding(Rule.HILT_DUPLICATE_BINDING,
                 "${key.first}${key.second?.let { " @$it" } ?: ""} is bound more than once: ${c.map { it.label }.sorted().joinToString(", ")}",
                 c[0].file, c[0].line, c[0].id))
         }
@@ -194,7 +206,7 @@ private fun gradle(g: Graph, config: Config): List<Finding> {
     for (e in deps) {
         val t = g.nodes[e.target] ?: continue
         if (t.attrs.bool("missing")) {
-            out.add(finding("gradle-unknown-project", "${g.label(e.source)} depends on ${t.label}, which settings does not include",
+            out.add(finding(Rule.GRADLE_UNKNOWN_PROJECT, "${g.label(e.source)} depends on ${t.label}, which settings does not include",
                 e.file, e.line, e.target))
         }
     }
@@ -209,7 +221,7 @@ private fun gradle(g: Graph, config: Config): List<Finding> {
             if (rule["allow_same_parent"] == true && s.substringBeforeLast(':') == t.substringBeforeLast(':')) continue
             val reason = (rule["reason"] as? String)?.let { ": $it" } ?: ""
             val via = e.attrs.str("via")?.let { " (added by plugin $it)" } ?: ""
-            out.add(finding("gradle-forbidden-dependency",
+            out.add(finding(Rule.GRADLE_FORBIDDEN_DEPENDENCY,
                 "$s depends on $t$via, which a forbid rule bans ($from -> $to)$reason", e.file, e.line, e.source))
         }
     }
@@ -255,7 +267,7 @@ private fun cycles(g: Graph, edges: List<Edge>): List<Finding> {
     }
     return comps.map { comp ->
         val first = g.nodes[comp[0]]!!
-        finding("gradle-cycle", "Module cycle: ${comp.joinToString(" -> ") { g.label(it) }}", first.file, first.line, comp[0])
+        finding(Rule.GRADLE_CYCLE, "Module cycle: ${comp.joinToString(" -> ") { g.label(it) }}", first.file, first.line, comp[0])
     }
 }
 
@@ -266,6 +278,6 @@ private fun manifest(g: Graph, config: Config): List<Finding> {
         .mapNotNull { e ->
             val name = e.target.substringAfter("::")
             if (name in allowed) null
-            else finding("manifest-permission", "${g.label(e.source)} declares $name, which is not in allowed_permissions", e.file, e.line, e.target)
+            else finding(Rule.MANIFEST_PERMISSION, "${g.label(e.source)} declares $name, which is not in allowed_permissions", e.file, e.line, e.target)
         }
 }

@@ -14,7 +14,7 @@ const val SCHEMA = "droidmap/1"
  */
 val KIND_RANK = mapOf(
     "ref" to 0, "class" to 1, "function" to 2, "injectable" to 3, "nav_route" to 4, "component" to 5,
-    "hilt_provider" to 6, "hilt_module" to 7, "entry_point" to 8, "screen" to 9, "viewmodel" to 10,
+    "hilt_provider" to 6, "koin_definition" to 6, "hilt_module" to 7, "koin_module" to 7, "entry_point" to 8, "screen" to 9, "viewmodel" to 10,
     "room_entity" to 11, "room_dao" to 12, "room_database" to 13,
 )
 
