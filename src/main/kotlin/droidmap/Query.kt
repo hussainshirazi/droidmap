@@ -1,5 +1,7 @@
 package droidmap
 
+import droidmap.extract.moduleId
+
 fun findNodes(g: Graph, text: String, limit: Int = 20): List<Node> {
     g.nodes[text]?.let { return listOf(it) }
     val low = text.lowercase()
@@ -95,7 +97,7 @@ fun impact(g: Graph, id: String, depth: Int = 4): Impact {
     val modules = (dependents.mapNotNull { it.module } + listOfNotNull(root.module)).toSortedSet().toList()
     val moduleDependents = ArrayList<String>()
     root.module?.let { m ->
-        val start = "module::$m"
+        val start = moduleId(m)
         val seenM = hashSetOf(start)
         val todo = ArrayDeque(listOf(start))
         while (todo.isNotEmpty()) for (e in g.inEdges(todo.removeLast())) {
@@ -106,7 +108,13 @@ fun impact(g: Graph, id: String, depth: Int = 4): Impact {
     return Impact(root, depth, dependents, modules, moduleDependents, dependents.filter { it.kind == "test" })
 }
 
-private fun loc(file: String?, line: Int?) = if (file == null) "no file" else if (line != null) "$file:$line" else file
+/** "file:line", "file", or [none] when there is no file. */
+fun location(file: String?, line: Int?, none: String = ""): String = if (file == null) none else if (line != null) "$file:$line" else file
+
+private fun loc(file: String?, line: Int?) = location(file, line, none = "no file")
+
+/** One line per node, as find prints them. */
+fun formatFind(hits: List<Node>): String = hits.joinToString("\n") { "${it.id}  [${it.kind}]  ${location(it.file, it.line)}" }
 
 fun formatImpact(r: Impact, limit: Int = 200): String {
     val n = r.node
@@ -126,25 +134,21 @@ fun formatImpact(r: Impact, limit: Int = 200): String {
     return lines.joinToString("\n")
 }
 
-private fun pyRepr(v: Any?): String = when (v) {
-    is String -> v
-    is List<*> -> v.joinToString(", ", "[", "]") { if (it is String) "'$it'" else pyRepr(it) }
-    is Boolean -> if (v) "True" else "False"
-    else -> v.toString()
-}
+/** An attribute value as text: a string as it is, anything else as compact JSON. */
+private fun plain(v: Any?): String = if (v is String) v else jsonText(v, pretty = false)
 
 fun formatShow(s: Shown): String {
     val n = s.node
     val lines = arrayListOf("${n.label} [${n.kind}]  ${n.id}", "  at ${loc(n.file, n.line)}")
     val attrs = n.attrs.filter { (k, v) -> k != "roles" && v != null && v != emptyList<Any>() && v != emptyMap<String, Any>() }.toSortedMap()
     if (n.roles.size > 1) attrs["roles"] = n.roles
-    for ((k, v) in attrs) lines.add("  $k: ${pyRepr(v)}")
+    for ((k, v) in attrs) lines.add("  $k: ${plain(v)}")
     for ((title, list) in listOf("Depends on" to s.dependsOn, "Used by" to s.usedBy)) {
         if (list.isEmpty()) continue
         lines.add("$title:")
         for (x in list.sortedWith(compareBy({ it.kind }, { it.label }))) {
             val extra = x.attrs.toSortedMap().filter { (_, v) -> v != null && v != "" && v != emptyList<Any>() }
-                .entries.joinToString("") { " ${it.key}=${pyRepr(it.value)}" }
+                .entries.joinToString("") { " ${it.key}=${plain(it.value)}" }
             lines.add("  ${x.kind.padEnd(16)} ${x.label} [${x.nodeKind}]$extra  ${loc(x.file, x.line)}")
         }
     }

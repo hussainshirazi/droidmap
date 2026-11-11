@@ -21,7 +21,7 @@ enum class Rule(val id: String, val severity: String, val description: String) {
     GRADLE_UNKNOWN_PROJECT("gradle-unknown-project", "error", "A project dependency on a module that settings does not include"),
     GRADLE_FORBIDDEN_DEPENDENCY("gradle-forbidden-dependency", "error", "A module dependency banned by a [[gradle.forbid]] rule"),
     GRADLE_CYCLE("gradle-cycle", "error", "Modules that depend on each other in a cycle"),
-    MANIFEST_PERMISSION("manifest-permission", "error", "A permission that is not in [manifest] allowed_permissions"),
+    MANIFEST_PERMISSION("manifest-permission", "error", "A permission (in a source manifest, or added by a library to the merged one) that is not in [manifest] allowed_permissions"),
 }
 
 /** Rules by id, sorted. */
@@ -277,7 +277,15 @@ private fun manifest(g: Graph, config: Config): List<Finding> {
     return g.edgesOf("uses_permission").filter { !it.attrs.bool("removed") && !isTestSet(it.attrs.str("source_set")) }
         .mapNotNull { e ->
             val name = e.target.substringAfter("::")
-            if (name in allowed) null
-            else finding(Rule.MANIFEST_PERMISSION, "${g.label(e.source)} declares $name, which is not in allowed_permissions", e.file, e.line, e.target)
+            when {
+                name in allowed -> null
+                e.attrs.bool("merged") -> finding(Rule.MANIFEST_PERMISSION,
+                    "${g.label(e.source)}'s merged manifest (${e.attrs.strings("variants").joinToString(", ")}) has $name" +
+                        (e.attrs.strings("added_by").takeIf { it.isNotEmpty() }?.let { ", added by ${it.joinToString(", ")}" } ?: "") +
+                        ", which is not in allowed_permissions: remove it with tools:node=\"remove\" in the app's manifest, or allow it" +
+                        (if (e.attrs.bool("stale")) " (the merged manifest is older than the build files: build again to refresh it)" else ""),
+                    e.file, e.line, e.target)
+                else -> finding(Rule.MANIFEST_PERMISSION, "${g.label(e.source)} declares $name, which is not in allowed_permissions", e.file, e.line, e.target)
+            }
         }
 }

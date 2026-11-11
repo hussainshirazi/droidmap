@@ -190,7 +190,7 @@ class Cli(private val out: PrintStream = System.out, private val err: PrintStrea
                 when {
                     a.flag("--json") -> out.println(jsonText(hits.map { Graph.nodeMap(it) }))
                     hits.isEmpty() -> out.println("No matches.")
-                    else -> hits.forEach { out.println("${it.id}  [${it.kind}]  ${it.file ?: ""}${it.line?.let { l -> ":$l" } ?: ""}") }
+                    else -> out.println(formatFind(hits))
                 }
                 if (hits.isEmpty()) 1 else 0
             }

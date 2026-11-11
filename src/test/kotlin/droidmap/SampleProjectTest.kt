@@ -160,7 +160,11 @@ class SampleProjectTest {
         assertEquals(0, cli("build", root.toString(), "-o", out.toString(), "--node-link").first)
         assertEquals(SCHEMA, compactJson.parseToJsonElement(out.resolve("graph.json").readText()).jsonObject["schema"]!!.jsonPrimitive.content)
         assertTrue(compactJson.parseToJsonElement(out.resolve("graph.node-link.json").readText()).jsonObject["links"]!!.jsonArray.isNotEmpty())
-        assertTrue("## Room" in out.resolve("REPORT.md").readText())
+        val report = out.resolve("REPORT.md").readText()
+        assertTrue("## Room" in report)
+        // Two diagrams: the modules (a convention plugin's dependency dotted) and the screen flow (an unregistered route in red).
+        assertEquals(2, Regex("```mermaid").findAll(report).count())
+        assertTrue(" -.-> " in report && " ==> " in report && "class " in report, report)
         val (code, text) = cli("impact", "HomeViewModel", root.toString())
         assertEquals(0, code)
         assertTrue("HomeScreen" in text)

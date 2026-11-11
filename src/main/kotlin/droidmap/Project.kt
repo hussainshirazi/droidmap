@@ -110,6 +110,10 @@ class Project(root: Path, config: Config? = null) {
     val menuXmlPaths = ArrayList<String>()
     val tomlPaths = ArrayList<String>()
     val jsonPaths = ArrayList<String>()
+    /** Merged manifests a Gradle build left in <module>/build/intermediates/merged_manifests/<variant>/. */
+    val mergedManifests = ArrayList<String>()
+    /** The manifest merger's reports, in <module>/build/outputs/logs/: which library added what. */
+    val mergerReports = ArrayList<String>()
     val skipped = ArrayList<String>()
     var modules: Map<String, String> = emptyMap() // gradle path -> dir ("" for the root)
         private set
@@ -160,10 +164,45 @@ class Project(root: Path, config: Config? = null) {
             if (size > MAX_FILE_BYTES) { skipped.add(rel); continue }
             bucket.add(rel)
         }
+        for ((rel, size, mtime) in buildOutputs()) {
+            stamps[rel] = "$size:$mtime"
+            digest.update("$rel\u0000$size\u0000$mtime\n".toByteArray())
+            (if (rel.endsWith(".xml")) mergedManifests else mergerReports).add(rel)
+        }
         fingerprint = digest.digest().joinToString("") { "%02x".format(it) }
     }
 
+    /**
+     * The merged manifests and manifest merger reports a build left next to each build file. Build
+     * directories are not walked: only these two known places are looked at.
+     */
+    private fun buildOutputs(): List<Triple<String, Long, Long>> {
+        val out = ArrayList<Triple<String, Long, Long>>()
+        for (dir in gradlePaths.map { it.substringBeforeLast('/', "") }.distinct()) {
+            val build = root.resolve(dir).resolve("build")
+            for ((sub, depth) in listOf("intermediates/merged_manifests" to 3, "outputs/logs" to 1)) {
+                val base = build.resolve(sub)
+                if (!Files.isDirectory(base)) continue
+                Files.walk(base, depth).use { files ->
+                    for (f in files) {
+                        val name = f.fileName.toString()
+                        if (name != "AndroidManifest.xml" && !(name.startsWith("manifest-merger-") && name.endsWith("-report.txt"))) continue
+                        val attrs = Files.readAttributes(f, BasicFileAttributes::class.java)
+                        val rel = root.relativize(f).toString().replace('\\', '/')
+                        if (attrs.isRegularFile && attrs.size() <= MAX_FILE_BYTES && config.ignorePaths.none { glob(rel, it) }) {
+                            out.add(Triple(rel, attrs.size(), attrs.lastModifiedTime().toMillis()))
+                        }
+                    }
+                }
+            }
+        }
+        return out.sortedBy { it.first }
+    }
+
     fun read(rel: String): String = String(Files.readAllBytes(root.resolve(rel)), Charsets.UTF_8)
+
+    /** When [rel] was last modified, as of the scan. */
+    fun mtime(rel: String): Long? = stamps[rel]?.substringAfter(':')?.toLongOrNull()
 
     /** The size and modification time [rel] had when the project was scanned. */
     fun stamp(rel: String): String? = stamps[rel]

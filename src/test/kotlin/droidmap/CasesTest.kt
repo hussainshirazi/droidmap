@@ -365,6 +365,36 @@ class CasesTest {
         assertEquals(emptyList(), f.filter { it.rule == "room-schema-stale" }.map { it.message })
     }
 
+    @Test
+    fun permissionsALibraryAddsToTheMergedManifest() {
+        val android = "xmlns:android=\"http://schemas.android.com/apk/res/android\""
+        val (_, f) = build(*app,
+            ".droidmap.toml" to """[manifest]
+allowed_permissions = ["android.permission.INTERNET"]""",
+            "app/src/main/AndroidManifest.xml" to """
+                <manifest $android><uses-permission android:name="android.permission.INTERNET"/></manifest>""",
+            "app/build/intermediates/merged_manifests/release/processReleaseManifest/AndroidManifest.xml" to """
+                <manifest $android package="com.x">
+                  <uses-permission android:name="android.permission.INTERNET"/>
+                  <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE"/>
+                  <permission android:name="com.x.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION" android:protectionLevel="signature"/>
+                  <uses-permission android:name="com.x.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION"/>
+                </manifest>""",
+            "app/build/intermediates/merged_manifests/releaseUnitTest/x/AndroidManifest.xml" to """
+                <manifest $android><uses-permission android:name="android.permission.CAMERA"/></manifest>""",
+            "app/build/outputs/logs/manifest-merger-release-report.txt" to """
+                uses-permission#android.permission.INTERNET
+                ADDED from /p/app/src/main/AndroidManifest.xml:3:5-67
+                uses-permission#android.permission.ACCESS_NETWORK_STATE
+                ADDED from [com.google.android.datatransport:transport-backend-cct:3.1.9] /c/AndroidManifest.xml:25:5-79
+                	android:name
+                		ADDED from [com.google.android.datatransport:transport-backend-cct:3.1.9] /c/AndroidManifest.xml:25:22-76""")
+        val message = f.single().message
+        assertTrue(":app's merged manifest (release) has android.permission.ACCESS_NETWORK_STATE, added by " +
+            "com.google.android.datatransport:transport-backend-cct:3.1.9" in message, message)
+        assertEquals("app/build.gradle.kts", f.single().file)
+    }
+
     private fun javaApp(itemFields: String) = arrayOf(*app,
         "app/schemas/com.x.db.AppDatabase/2.json" to """
             {"formatVersion": 1, "database": {"version": 2, "identityHash": "a", "entities": [{"tableName": "items", "fields": [

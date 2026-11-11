@@ -133,7 +133,7 @@ class McpServer(private val root: Path, private val configPath: Path? = null, pr
                 if (q.isEmpty()) throw ToolError("query is required")
                 val hits = findNodes(g, q, (args["limit"] as? Number)?.toInt() ?: 20)
                 if (hits.isEmpty()) return "No node matches '$q'."
-                return hits.joinToString("\n") { "${it.id}  [${it.kind}]  ${it.file ?: ""}${it.line?.let { l -> ":$l" } ?: ""}" }
+                return formatFind(hits)
             }
         }
         val text = (args["node"] as? String)?.trim().orEmpty()
