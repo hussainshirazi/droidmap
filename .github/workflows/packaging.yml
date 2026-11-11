@@ -61,6 +61,8 @@ jobs:
         run: |
           Invoke-Expression "& {$(Invoke-RestMethod https://get.scoop.sh)} -RunAsAdmin"
           $env:Path = "$env:USERPROFILE\scoop\shims;$env:Path"
-          scoop install ./bucket/droidmap.json
+          # The README's steps, with this checkout as the bucket's repository.
+          scoop bucket add droidmap "$env:GITHUB_WORKSPACE"
+          scoop install droidmap/droidmap
           droidmap --version
           exit $LASTEXITCODE
