@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<navigation xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:id="@+id/nav_graph"
+    app:startDestination="@id/listFragment">
+    <fragment android:id="@+id/listFragment" android:name="com.example.app.ListFragment">
+        <action android:id="@+id/action_list_to_detail" app:destination="@id/detailFragment" />
+    </fragment>
+    <fragment android:id="@+id/detailFragment" android:name="com.example.app.DetailFragment" />
+    <fragment android:id="@+id/unusedFragment" android:name="com.example.app.UnusedFragment" />
+</navigation>

@@ -1,0 +1,10 @@
+[rules]
+"room-insert-replace" = "error"
+
+[manifest]
+allowed_permissions = ["android.permission.INTERNET"]
+
+[[gradle.forbid]]
+from = ":feature:*"
+to = ":feature:*"
+reason = "features talk through :core"

@@ -1,0 +1,25 @@
+name: Release
+
+# Push a tag such as v0.1.0 to build droidmap.jar and attach it to a GitHub release.
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: gradle/actions/setup-gradle@v4
+      - run: chmod +x gradlew && ./gradlew test fatJar
+      - run: java -jar build/libs/droidmap.jar --version
+      - run: gh release create "$GITHUB_REF_NAME" build/libs/droidmap.jar --title "droidmap $GITHUB_REF_NAME" --generate-notes
+        env:
+          GH_TOKEN: ${{ github.token }}
