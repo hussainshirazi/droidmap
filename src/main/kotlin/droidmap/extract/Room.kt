@@ -1,7 +1,7 @@
 package droidmap.extract
 
+import droidmap.Git
 import droidmap.Graph
-import droidmap.MAX_FILE_BYTES
 import droidmap.Project
 import droidmap.Source
 import droidmap.TypeRef
@@ -12,10 +12,14 @@ import droidmap.compactJson
 import droidmap.fq
 import droidmap.hasAnn
 import droidmap.receiverText
+import droidmap.int
+import droidmap.str
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.intOrNull
-import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonPrimitive
 import org.jetbrains.kotlin.com.intellij.psi.PsiElement
 import org.jetbrains.kotlin.psi.KtCallExpression
@@ -42,13 +46,17 @@ fun migrationId(db: String?, from: Int, to: Int, name: String) = "room.migration
 fun schemaId(db: String, version: Int) = "room.schema::$db@$version"
 
 /** Room: databases, entities, DAOs, exported schema files, migrations and migration tests. */
-class RoomScan(private val p: Project, private val g: Graph) {
+class RoomScan(private val p: Project, private val g: Graph, private val base: String? = null) {
     private val dbs = LinkedHashMap<String, Pair<KtClassOrObject, Source>>()
     private val entities = HashMap<String, KtClassOrObject>()
     private val tables = HashMap<String, String>() // lower table name -> entity fq
     private val daos = LinkedHashMap<String, Pair<KtClassOrObject, Source>>()
     private class Manual(val id: String, val name: String, val inTests: Boolean)
     private val manual = ArrayList<Manual>()
+    /** Databases whose @Database(entities = [...]) lists a class droidmap could not read. */
+    private val partialEntityLists = HashSet<String>()
+    /** (database, version) -> table -> column -> what its schema JSON says. */
+    private val schemaTables = HashMap<Pair<String, Int>, Map<String, Map<String, Column>>>()
 
     fun run() {
         val files = p.sources.filter { it.importsFrom("androidx.room") }
@@ -71,6 +79,7 @@ class RoomScan(private val p: Project, private val g: Graph) {
         }
         countReferences()
         schemas()
+        drift()
         tests()
     }
 
@@ -94,6 +103,7 @@ class RoomScan(private val p: Project, private val g: Graph) {
         if (version == null) g.addUnresolved("room_version", fq, s.path, s.line(c), "@Database version is not a constant")
         for ((name, lit) in classRefs(args.arg("entities"))) {
             val e = p.index.resolveType(name, s, c)?.fq()
+            if (e == null || e !in entities) partialEntityLists.add(fq)
             if (e == null) g.addUnresolved("room_entity", name, s.path, s.line(lit), "entity class not found in the project")
             else g.addEdge(dbid, classId(e), "contains_entity", s.path, s.line(lit))
         }
@@ -251,6 +261,12 @@ class RoomScan(private val p: Project, private val g: Graph) {
     }
 
     // ----- schema files -----
+    /** The "database" object of a Room schema JSON file. */
+    private fun schemaDatabase(text: String): JsonObject? =
+        (compactJson.parseToJsonElement(text) as? JsonObject)?.get("database") as? JsonObject
+
+    private fun JsonObject.text(key: String): String? = (get(key) as? JsonPrimitive)?.contentOrNull
+
     private fun schemas() {
         for (rel in p.jsonPaths) {
             val parts = rel.split('/')
@@ -258,23 +274,67 @@ class RoomScan(private val p: Project, private val g: Graph) {
             val db = parts[parts.size - 2]
             val version = parts.last().dropLast(5).toIntOrNull() ?: continue
             var tablesInFile = emptyList<String>()
+            var hash: String? = null
             try {
-                val raw = p.read(rel)
-                if (raw.length <= MAX_FILE_BYTES) {
-                    val database = (compactJson.parseToJsonElement(raw) as? JsonObject)?.get("database") as? JsonObject
-                    val jv = database?.get("version")?.jsonPrimitive?.intOrNull
-                    if (jv != null && jv != version) g.addUnresolved("room_schema", rel, rel, null, "file name says $version, JSON says $jv")
-                    tablesInFile = database?.get("entities")?.jsonArray?.mapNotNull {
-                        ((it as? JsonObject)?.get("tableName"))?.jsonPrimitive?.contentOrNull
-                    }?.sorted() ?: emptyList()
-                }
+                val database = schemaDatabase(p.read(rel))
+                val jv = database?.get("version")?.jsonPrimitive?.intOrNull
+                if (jv != null && jv != version) g.addUnresolved("room_schema", rel, rel, null, "file name says $version, JSON says $jv")
+                hash = database?.text("identityHash")
+                val ts = (database?.get("entities") as? JsonArray)?.filterIsInstance<JsonObject>() ?: emptyList()
+                tablesInFile = ts.mapNotNull { it.text("tableName") }.sorted()
+                schemaTables[db to version] = ts.mapNotNull { t ->
+                    val fields = (t["fields"] as? JsonArray)?.filterIsInstance<JsonObject>() ?: return@mapNotNull null
+                    val cols = fields.mapNotNull { f ->
+                        f.text("columnName")?.let { Column(it, f.text("affinity"), (f["notNull"] as? JsonPrimitive)?.booleanOrNull == true) }
+                    }
+                    t.text("tableName")?.let { it to cols.associateBy { c -> c.name } }
+                }.toMap()
             } catch (e: Exception) {
                 g.addUnresolved("room_schema", rel, rel, null, "not valid Room schema JSON")
             }
+            // With --base: the same file's identity hash there (null when the file is new since then).
+            val baseHash = base?.let { b -> Git.show(p.root, b, rel)?.let { runCatching { schemaDatabase(it)?.text("identityHash") }.getOrNull() } }
             val sid = schemaId(db, version)
             g.addNode(sid, "room_schema", "${db.substringAfterLast('.')} v$version", rel, null, p.moduleOf(rel),
-                mapOf("db" to db, "version" to version, "tables" to tablesInFile))
+                mapOf("db" to db, "version" to version, "tables" to tablesInFile, "identity_hash" to hash, "base_identity_hash" to baseHash))
             g.addEdge(classId(db), sid, "has_schema", rel)
+        }
+    }
+
+    /**
+     * Compares each database's entities with the schema JSON of its current version. A difference
+     * means the version was not bumped after an entity changed (users on it crash on update), or
+     * the JSON was not regenerated. Recorded as the database's "schema_drift" attribute.
+     */
+    private fun drift() {
+        val reader = RoomColumns(p)
+        for (fq in dbs.keys) {
+            val node = g.nodes.getValue(classId(fq))
+            val version = node.attrs.int("version") ?: continue
+            val json = schemaTables[fq to version] ?: continue
+            val jsonByLower = json.mapKeys { it.key.lowercase() }
+            val problems = ArrayList<String>()
+            val declared = HashSet<String>()
+            for (e in g.outEdges(classId(fq)).filter { it.kind == "contains_entity" }) {
+                val entity = g.nodes[e.target] ?: continue
+                val c = entities[e.target.substringAfter("::")] ?: continue
+                val table = entity.attrs.str("table") ?: continue
+                declared.add(table.lowercase())
+                if (c.hasAnn("Fts3", "Fts4")) continue // FTS tables have hidden columns; not compared
+                val have = jsonByLower[table.lowercase()]
+                if (have == null) { problems.add("table $table is new"); continue }
+                val mine = reader.of(c)?.associateBy { it.name } ?: continue
+                for (col in (mine.keys - have.keys).sorted()) problems.add("$table.$col is new")
+                for (col in (have.keys - mine.keys).sorted()) problems.add("$table.$col is gone")
+                for (col in (mine.keys intersect have.keys).sorted()) {
+                    val a = mine.getValue(col)
+                    val b = have.getValue(col)
+                    if (a.notNull != b.notNull) problems.add("$table.$col is ${if (a.notNull) "now NOT NULL" else "now nullable"}")
+                    if (a.affinity != null && b.affinity != null && a.affinity != b.affinity) problems.add("$table.$col is now ${a.affinity} (was ${b.affinity})")
+                }
+            }
+            if (fq !in partialEntityLists) for (t in json.keys.filter { it.lowercase() !in declared }.sorted()) problems.add("table $t is gone")
+            if (problems.isNotEmpty()) node.attrs["schema_drift"] = problems
         }
     }
 

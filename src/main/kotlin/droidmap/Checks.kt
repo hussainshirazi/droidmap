@@ -7,6 +7,8 @@ package droidmap
 val RULES: Map<String, Pair<String, String>> = sortedMapOf(
     "room-migration-path" to ("error" to "Every known schema version has a migration path to the current version"),
     "room-schema-missing" to ("warning" to "Schema JSON is exported for the current version and every version before it"),
+    "room-schema-stale" to ("warning" to "The entities match the schema JSON of the database's current version (else the version was not bumped)"),
+    "room-schema-changed" to ("warning" to "With --base: no schema JSON of a version that existed there has changed (a shipped schema must never change)"),
     "room-migration-untested" to ("warning" to "Every migration step is run by a MigrationTestHelper test"),
     "room-migration-unused" to ("warning" to "Every manual Migration is used by app code (for example in addMigrations), not only by tests"),
     "room-destructive-fallback" to ("warning" to "fallbackToDestructiveMigration deletes user data when a migration is missing"),
@@ -83,6 +85,13 @@ private fun room(g: Graph): List<Finding> {
                 }
             }
         }
+        val drift = db.attrs.strings("schema_drift")
+        if (drift.isNotEmpty()) {
+            out.add(finding("room-schema-stale",
+                "${db.label}'s entities no longer match $version.json, the schema of its current version ($version): " +
+                    "${drift.joinToString(", ")}. Bump the version and add a migration; if version $version has not " +
+                    "shipped yet, rebuild to regenerate $version.json and commit it.", db.file, db.line, db.id))
+        }
         val untested = migs.filter { m -> g.inEdges(m.id).none { it.kind == "tests" } }
         if (untested.isNotEmpty()) {
             val steps = untested.map { it.attrs.int("from_version")!! to it.attrs.int("to_version")!! }
@@ -98,6 +107,15 @@ private fun room(g: Graph): List<Finding> {
                 "${n.attrs.str("name")} (${n.attrs.int("from_version")}->${n.attrs.int("to_version")}) is never used by app code " +
                     "(tests aside): is it passed to addMigrations()?", n.file, n.line, n.id))
         }
+    }
+    for (s in g.byKind("room_schema")) {
+        val before = s.attrs.str("base_identity_hash") ?: continue
+        if (before == s.attrs.str("identity_hash")) continue
+        val v = s.attrs.int("version")
+        out.add(finding("room-schema-changed",
+            "${s.file} changed since ${g.meta["base"]}: the schema of version $v is different. If version $v has shipped, " +
+                "phones that have it crash on update (\"Room cannot verify the data integrity\"): bump the version and add " +
+                "a migration instead. If it has not shipped, this is expected.", s.file, null, s.id))
     }
     for (fb in g.meta.maps("room_destructive_fallback")) {
         out.add(finding("room-destructive-fallback",

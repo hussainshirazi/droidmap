@@ -17,7 +17,8 @@ private val NODE_ARG = mapOf("type" to "string", "description" to
 
 val TOOLS: List<Map<String, Any?>> = listOf(
     mapOf("name" to "droidmap_check",
-        "description" to "Run droidmap's Android rules (Room migration paths, schema files and migration tests; navigation " +
+        "description" to "Run droidmap's Android rules (Room migration paths, schema files, entities that no longer match the " +
+            "current version's schema so the version must be bumped, and migration tests; navigation " +
             "targets with no destination; Hilt missing or duplicate bindings; Gradle module rules and cycles; manifest " +
             "permission allowlist) and list the findings.",
         "inputSchema" to mapOf("type" to "object", "properties" to mapOf(

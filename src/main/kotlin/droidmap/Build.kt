@@ -9,13 +9,14 @@ import java.nio.file.Path
 
 const val VERSION = "0.1.0"
 
-/** Runs every extractor over a project. */
-fun buildGraph(root: Path, config: Config? = null): Pair<Graph, Project> {
+/** Runs every extractor over a project; with [base] (a git commit), Room schema files are also compared with that commit. */
+fun buildGraph(root: Path, config: Config? = null, base: String? = null): Pair<Graph, Project> {
     val p = Project(root, config)
     val g = Graph()
+    if (base != null) g.meta["base"] = base
     GradleScan(p, g).run()
     p.parseKotlin()
-    RoomScan(p, g).run()
+    RoomScan(p, g, base).run()
     NavScan(p, g).run()
     HiltScan(p, g).run()
     ManifestScan(p, g).run()

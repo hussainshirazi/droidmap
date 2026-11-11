@@ -8,6 +8,7 @@
 Generic code graphs see classes and calls. They do not see that:
 
 - version 4 of your Room database has no migration to version 5, so users on 4 crash on update;
+- an entity gained a column but the database version was not bumped, which crashes on update too;
 - `navigate("settings")` points at a route no `NavHost` registers;
 - the ViewModel your screen uses injects a repository that nothing binds;
 - a feature module gets `:core:data` through a convention plugin in `build-logic`, which your module rules forbid.
@@ -103,7 +104,7 @@ Kotlin is read with the Kotlin compiler's own parser (the one detekt and ktlint 
 ## Commands
 
 ```sh
-droidmap check  [path] [--format text|json|sarif] [--fail-on error|warning|info|never]
+droidmap check  [path] [--format text|json|sarif] [--fail-on error|warning|info|never] [--sarif FILE] [--base REF]
 droidmap impact <node> [path] [--depth N] [--json]   # what depends on a node
 droidmap show   <node> [path] [--json]               # a node, its dependencies and its users
 droidmap find   <text> [path] [--limit N] [--json]   # search nodes
@@ -117,7 +118,7 @@ droidmap mcp    [path]                               # run the MCP server over s
 
 Exit codes: 0 when done, 1 when `check` finds something at `--fail-on` or above (or `find` matches nothing), 2 for a usage or config error, 3 for an internal error.
 
-`check --sarif FILE` also writes the findings as SARIF, which most CI systems and code review tools can show. Add `droidmap-out/` to your `.gitignore` if you use `build`.
+`check --sarif FILE` also writes the findings as SARIF, which most CI systems and code review tools can show. `check --base REF` (a branch, tag or commit) also compares Room schema files with that commit; your last release tag is the most precise choice, since only a shipped schema must never change. Add `droidmap-out/` to your `.gitignore` if you use `build`.
 
 ## In GitHub Actions
 
@@ -144,6 +145,7 @@ Findings show up as code scanning alerts, as notes on the pull request's changed
 | `fail-on` | `error` | `warning` or `info` to be stricter, `never` to only report |
 | `upload-sarif` | `true` | set `false` on a private repository without GitHub Advanced Security (code scanning is free on public ones); the job summary still lists the findings |
 | `args` | | extra arguments for `droidmap check`, such as `--config tools/droidmap.toml` |
+| `base` | `auto` | the git ref Room schema files are compared with: `auto` is a pull request's base branch, `none` turns it off; another ref must be fetched (for example with `fetch-depth: 0`) |
 | `version` | the pinned release | a droidmap release such as `0.1.0` |
 
 ## Rules
@@ -152,6 +154,8 @@ Findings show up as code scanning alerts, as notes on the pull request's changed
 |---|---|---|
 | `room-migration-path` | error | a known schema version with no migration path to the current version |
 | `room-schema-missing` | warning | no exported schema JSON for the current version or an earlier one |
+| `room-schema-stale` | warning | entities that no longer match the schema JSON of the current version: a changed entity without a version bump crashes on update |
+| `room-schema-changed` | warning | with `--base REF`: the schema JSON of a version that already existed at `REF` changed, which is the same crash once that version has shipped |
 | `room-migration-untested` | warning | migration steps no `MigrationTestHelper` test runs |
 | `room-migration-unused` | warning | a manual `Migration` that app code never uses (not passed to `addMigrations`?), even if a test runs it |
 | `room-destructive-fallback` | warning | `fallbackToDestructiveMigration()`, which deletes user data |

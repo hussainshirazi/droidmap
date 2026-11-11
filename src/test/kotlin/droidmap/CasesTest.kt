@@ -219,6 +219,78 @@ class CasesTest {
         assertEquals(listOf("MIGRATION_2_3"), f.filter { it.rule == "room-migration-unused" }.map { it.message.substringBefore(" ") })
     }
 
+    private val schemaJson = """
+        {"formatVersion": 1, "database": {"version": 1, "identityHash": "aaa", "entities": [{"tableName": "items", "fields": [
+          {"fieldPath": "id", "columnName": "id", "affinity": "INTEGER", "notNull": true},
+          {"fieldPath": "title", "columnName": "item_title", "affinity": "TEXT", "notNull": true},
+          {"fieldPath": "note", "columnName": "note", "affinity": "TEXT", "notNull": false},
+          {"fieldPath": "address.city", "columnName": "home_city", "affinity": "TEXT", "notNull": false},
+          {"fieldPath": "createdAt", "columnName": "createdAt", "affinity": "INTEGER", "notNull": true}]}]}}"""
+
+    private fun roomProject(item: String, stamped: String = "var createdAt: Long = 0") = arrayOf(*app,
+        "app/schemas/com.x.db.AppDb/1.json" to schemaJson,
+        "app/src/main/kotlin/com/x/db/Db.kt" to """
+            package com.x.db
+            import androidx.room.*
+
+            open class Stamped { $stamped }
+            data class Address(val city: String)
+
+            $item
+
+            @Database(entities = [Item::class], version = 1)
+            abstract class AppDb : RoomDatabase()""")
+
+    @Test
+    fun entitiesAreComparedWithTheCurrentSchemaJson() {
+        // Column names, @ColumnInfo, a nullable @Embedded with a prefix, @Ignore and a superclass field all match 1.json.
+        val (_, ok) = build(*roomProject("""
+            @Entity(tableName = "items")
+            data class Item(
+                @PrimaryKey val id: Long,
+                @ColumnInfo(name = "item_title") val title: String,
+                val note: String?,
+                @Embedded(prefix = "home_") val address: Address?,
+                @Ignore val cached: String = "",
+            ) : Stamped()"""))
+        assertEquals(emptyList(), ok.filter { it.rule == "room-schema-stale" }.map { it.message })
+
+        val (_, f) = build(*roomProject("""
+            @Entity(tableName = "items")
+            data class Item(
+                @PrimaryKey val id: Long,
+                @ColumnInfo(name = "item_title") val title: String?,
+                @Embedded(prefix = "home_") val address: Address?,
+                val rating: Int,
+            ) : Stamped()""", stamped = "var createdAt: String = \"\""))
+        val message = f.single { it.rule == "room-schema-stale" }.message
+        for (part in listOf("items.rating is new", "items.note is gone", "items.createdAt is now TEXT (was INTEGER)", "items.item_title is now nullable")) {
+            assertTrue(part in message, message)
+        }
+    }
+
+    @Test
+    fun schemaFileChangedSinceBase() {
+        val root = write(*roomProject("""
+            @Entity(tableName = "items")
+            data class Item(@PrimaryKey val id: Long)"""))
+        fun git(vararg args: String) {
+            val proc = ProcessBuilder(listOf("git", "-C", root.toString(), "-c", "user.name=t", "-c", "user.email=t@example.com",
+                "-c", "commit.gpgsign=false") + args).redirectErrorStream(true).start()
+            val out = proc.inputStream.readBytes().toString(Charsets.UTF_8)
+            assertEquals(0, proc.waitFor(), out)
+        }
+        git("init", "-q")
+        git("add", ".")
+        git("commit", "-q", "-m", "base")
+        val schema = root.resolve("app/schemas/com.x.db.AppDb/1.json")
+        Files.writeString(schema, Files.readString(schema).replace("\"aaa\"", "\"bbb\""))
+        val g = buildGraph(root, base = "HEAD").first
+        assertEquals(listOf("app/schemas/com.x.db.AppDb/1.json"), runChecks(g).filter { it.rule == "room-schema-changed" }.map { it.file })
+        assertEquals(0, runChecks(buildGraph(root).first).count { it.rule == "room-schema-changed" }) // only with a base
+        assertEquals(2, run("check", root.toString(), "--base", "no-such-ref"))
+    }
+
     @Test
     fun daoWritesThroughAGenericBaseDao() {
         val (g, _) = build(*app, "app/src/main/kotlin/com/x/db/Daos.kt" to """

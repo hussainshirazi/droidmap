@@ -16,6 +16,7 @@ private val USAGE = """
 
       build  [path] [-o DIR] [--node-link]        scan and write droidmap-out/graph.json and REPORT.md
       check  [path] [--format text|json|sarif] [--fail-on error|warning|info|never] [--sarif FILE]
+             [--base REF]                           also compare Room schema files with a git commit
       impact <node> [path] [--depth N] [--json]   what depends on a node
       show   <node> [path] [--json]                a node, its dependencies and users
       find   <text> [path] [--limit N] [--json]
@@ -75,9 +76,16 @@ class Cli(private val out: PrintStream = System.out, private val err: PrintStrea
         throw UsageError("cannot read the config: ${e.message}")
     }
 
+    /** --base REF, checked to be a commit. */
+    private fun base(root: Path, a: Args): String? = a.opt("--base")?.also {
+        if (!Git.isCommit(root, it)) throw UsageError("--base $it is not a commit in the git repository of $root (is it fetched?)")
+    }
+
     private fun load(root: Path, a: Args): Pair<Graph, Config> {
         val cfg = config(root, a)
-        val saved = a.opt("--graph") ?: return buildGraph(root, cfg).first to cfg
+        val base = base(root, a)
+        val saved = a.opt("--graph") ?: return buildGraph(root, cfg, base).first to cfg
+        if (base != null) throw UsageError("--base compares source files, so it cannot be used with --graph")
         val g = try {
             Graph.load(Path.of(saved))
         } catch (e: Exception) {
@@ -120,11 +128,11 @@ class Cli(private val out: PrintStream = System.out, private val err: PrintStrea
         val common = setOf("--config", "--graph")
         return when (argv[0]) {
             "build" -> {
-                val a = parseArgs(rest, setOf("--config", "--out"), setOf("--node-link"), mapOf("-o" to "--out"))
+                val a = parseArgs(rest, setOf("--config", "--out", "--base"), setOf("--node-link"), mapOf("-o" to "--out"))
                 val t0 = System.nanoTime()
                 val r = root(a.positionals.firstOrNull())
                 val cfg = config(r, a)
-                val g = buildGraph(r, cfg).first
+                val g = buildGraph(r, cfg, base(r, a)).first
                 val dir = a.opt("--out")?.let { Path.of(it) } ?: r.resolve(OUT_DIR)
                 g.save(dir.resolve("graph.json"))
                 if (a.flag("--node-link")) Files.writeString(dir.resolve("graph.node-link.json"), jsonText(g.toNodeLink()) + "\n")
@@ -137,7 +145,7 @@ class Cli(private val out: PrintStream = System.out, private val err: PrintStrea
                 0
             }
             "check" -> {
-                val a = parseArgs(rest, common + setOf("--format", "--fail-on", "--sarif"), emptySet())
+                val a = parseArgs(rest, common + setOf("--format", "--fail-on", "--sarif", "--base"), emptySet())
                 val format = a.opt("--format") ?: "text"
                 val failOn = a.opt("--fail-on") ?: "error"
                 if (format !in setOf("text", "json", "sarif")) throw UsageError("--format is text, json or sarif")
