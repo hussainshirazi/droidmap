@@ -51,7 +51,7 @@ private class ToolError(message: String) : Exception(message)
  * The graph is rebuilt when a scanned file or the config changes.
  */
 class McpServer(private val root: Path, private val configPath: Path? = null, private val log: PrintStream = System.err) {
-    private var graph: Graph? = null
+    private var built: Built? = null
     private var config = Config()
     private var stamp: String? = null
 
@@ -60,16 +60,18 @@ class McpServer(private val root: Path, private val configPath: Path? = null, pr
         return try { "${Files.size(p)}:${Files.getLastModifiedTime(p).toMillis()}" } catch (e: Exception) { "-" }
     }
 
+    /** The graph, rebuilt when a file or the config changed; files that did not change are not parsed again. */
     private fun current(): Pair<Graph, Config> {
         val cfg = Config.load(root, configPath)
-        val s = Project(root, cfg).fingerprint + configStamp()
-        if (graph == null || s != stamp) {
-            graph = buildGraph(root, cfg).first
+        val p = Project(root, cfg)
+        val s = p.fingerprint + configStamp()
+        val b = built?.takeIf { s == stamp } ?: buildGraph(p, previous = built?.code).also {
+            built = it
             config = cfg
             stamp = s
-            log.println("droidmap: graph built (${graph!!.nodes.size} nodes, ${graph!!.edges.size} edges)")
+            log.println("droidmap: graph built (${it.graph.nodes.size} nodes, ${it.graph.edges.size} edges)")
         }
-        return graph!! to config
+        return b.graph to config
     }
 
     @Suppress("UNCHECKED_CAST")

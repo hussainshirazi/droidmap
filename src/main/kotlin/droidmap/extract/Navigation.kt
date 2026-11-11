@@ -1,25 +1,22 @@
 package droidmap.extract
 
+import droidmap.Arg
+import droidmap.Call
+import droidmap.Code
+import droidmap.Fn
 import droidmap.Graph
 import droidmap.Project
 import droidmap.Source
-import droidmap.TypeRef
 import droidmap.WILD
 import droidmap.arg
-import droidmap.calleeName
-import droidmap.fq
-import droidmap.name
-import droidmap.receiverText
 import org.jetbrains.kotlin.com.intellij.psi.PsiElement
+import org.jetbrains.kotlin.com.intellij.psi.PsiReferenceExpression
 import org.jetbrains.kotlin.psi.KtCallExpression
 import org.jetbrains.kotlin.psi.KtClassLiteralExpression
 import org.jetbrains.kotlin.psi.KtDotQualifiedExpression
 import org.jetbrains.kotlin.psi.KtExpression
 import org.jetbrains.kotlin.psi.KtNameReferenceExpression
-import org.jetbrains.kotlin.psi.KtNamedFunction
-import org.jetbrains.kotlin.psi.KtValueArgument
-import org.jetbrains.kotlin.psi.psiUtil.collectDescendantsOfType
-import org.jetbrains.kotlin.psi.psiUtil.getStrictParentOfType
+import org.jetbrains.kotlin.psi.KtQualifiedExpression
 import org.w3c.dom.Element
 import org.xml.sax.InputSource
 import java.io.StringReader
@@ -28,6 +25,7 @@ import javax.xml.parsers.DocumentBuilderFactory
 private val DEST_CALLS = setOf("composable", "dialog", "navigation", "bottomSheet", "activity", "entry")
 private val START_ARGS = setOf("startDestination", "startKey", "startRoute")
 private val BACKSTACK_STARTS = setOf("rememberNavBackStack", "NavBackStack")
+private val R_ID = Regex("""^(?:[\w.]+\.)?R\.id\.(\w+)$""")
 const val ANDROID_NS = "http://schemas.android.com/apk/res/android"
 const val APP_NS = "http://schemas.android.com/apk/res-auto"
 const val TOOLS_NS = "http://schemas.android.com/tools"
@@ -84,23 +82,24 @@ fun Element.childElements(): List<Element> {
 
 fun Element.attr(ns: String, name: String): String? = getAttributeNS(ns, name).takeIf { it.isNotEmpty() }
 
-/** Navigation: Compose Navigation (string and type-safe routes), Navigation 3 and XML graphs. */
-class NavScan(private val p: Project, private val g: Graph) {
+/** Navigation: Compose Navigation (string and type-safe routes), Navigation 3 and XML graphs, and navigate() calls in Kotlin and Java. */
+class NavScan(private val p: Project, private val code: Code, private val g: Graph) {
+    private val index = code.index
     private val stringDests = LinkedHashMap<String, String>() // route pattern -> node id
     private val typeDests = LinkedHashMap<String, String>() // fq -> node id
     private val xmlIds = HashMap<String, String>()
     private val xmlActions = HashMap<String, String>()
-    private val pendingStarts = ArrayList<Pair<String, KtCallExpression>>()
-
-    private fun files() = p.sources.filter { !it.isTest }
+    private val pendingStarts = ArrayList<Pair<String, Call>>()
+    private val files = code.sources.filter { !it.isTest }
 
     fun run() {
-        for (s in files().filter { it.importsFrom("androidx.navigation") }) {
-            for (call in s.file.collectDescendantsOfType<KtCallExpression> { it.calleeName() in DEST_CALLS }) destination(s, call)
+        for (s in files) {
+            if (!s.isKotlin || !s.importsFrom("androidx.navigation")) continue
+            for (call in s.calls) if (call.name in DEST_CALLS && !call.isNew) destination(s, call)
         }
         xmlGraphs()
         menuItems()
-        for (s in files()) {
+        for (s in files) {
             navigateCalls(s)
             starts(s)
         }
@@ -125,71 +124,62 @@ class NavScan(private val p: Project, private val g: Graph) {
     private fun resourceIdUses() {
         if (xmlIds.isEmpty()) return
         val counts = HashMap<String, Int>()
-        for (s in files()) for (e in s.file.collectDescendantsOfType<KtDotQualifiedExpression>()) {
-            val key = (e.selectorExpression as? KtNameReferenceExpression)?.getReferencedName() ?: continue
-            val r = e.receiverExpression.text.filterNot { it.isWhitespace() }
-            if (r == "R.id" || r.endsWith(".R.id")) counts.merge(key, 1, Int::plus)
-        }
+        for (s in files) for (key in s.resourceIds) counts.merge(key, 1, Int::plus)
         for ((key, nid) in xmlIds) counts[key]?.let { g.nodes.getValue(nid).attrs["references"] = it }
     }
 
-    private fun fnNode(s: Source, at: PsiElement): String? {
-        val fn = (at as? KtNamedFunction) ?: at.getStrictParentOfType<KtNamedFunction>() ?: return null
-        return nodeForFun(g, fn, s, "function")
-    }
+    private fun fnNode(fn: Fn?): String? = fn?.let { nodeForFun(g, it, "function") }
 
-    private fun destination(s: Source, call: KtCallExpression) {
-        val name = call.calleeName() ?: return
+    private fun destination(s: Source, call: Call) {
+        val name = call.name
         val api = if (name == "entry") "nav3" else "compose"
-        val typeArg = call.typeArguments.firstOrNull()?.typeReference?.let { TypeRef.of(it) }
+        val typeArg = call.typeArgs.firstOrNull()
         if (name == "entry" && typeArg == null) return
         val nid: String
         val common = mapOf("api" to api, "registered" to true, "graph" to flag(name == "navigation"), "dialog" to flag(name == "dialog"),
-            "deep_link" to flag(call.valueArguments.arg("deepLinks") != null))
+            "deep_link" to flag(call.args.arg("deepLinks") != null))
         if (typeArg != null) {
-            val d = p.index.resolveType(typeArg.name, s, call)
-            val fq = d?.fq() ?: typeArg.name
-            val ds = d?.let { p.index.sourceOf(it) }
+            val d = index.resolveType(typeArg.name, s, call.psi)
+            val fq = d?.fq ?: typeArg.name
             nid = destId(fq)
-            g.addNode(nid, "nav_destination", fq.substringAfterLast('.'), ds?.path ?: s.path, ds?.line(d) ?: s.line(call),
-                ds?.module ?: s.module, mapOf("route" to fq, "style" to "type", "resolved" to flag(d != null)) + common)
+            g.addNode(nid, "nav_destination", fq.substringAfterLast('.'), d?.src?.path ?: s.path, d?.line ?: call.line,
+                d?.src?.module ?: s.module, mapOf("route" to fq, "style" to "type", "resolved" to flag(d != null)) + common)
             typeDests[fq] = nid
-            if (d != null && ds != null) nodeForClass(g, d, ds, "nav_route")
+            if (d != null) nodeForClass(g, d, "nav_route")
         } else {
             // navigation(startDestination, route) takes the route second.
-            val arg = call.valueArguments.arg("route", if (name == "navigation") 1 else 0) ?: return
-            val v = p.eval.eval(arg.getArgumentExpression())
+            val arg = call.args.arg("route", if (name == "navigation") 1 else 0) ?: return
+            val v = code.eval.eval(arg.expr)
             if (v !is String) {
                 if (name in setOf("composable", "dialog", "navigation")) {
-                    g.addUnresolved("nav_route", arg.text.take(120), s.path, s.line(call), "route is not a constant")
+                    g.addUnresolved("nav_route", arg.text.take(120), s.path, call.line, "route is not a constant")
                 }
                 return
             }
             nid = destId(display(v))
             // A route held in a constant (composable(SPENDING)) can be reached through other uses
             // of that constant, such as a list of bottom-bar tabs.
-            val constant = when (val e = arg.getArgumentExpression()) {
+            val constant = when (val e = arg.expr) {
                 is KtNameReferenceExpression -> e.getReferencedName()
                 is KtDotQualifiedExpression -> (e.selectorExpression as? KtNameReferenceExpression)?.getReferencedName()
                 else -> null
             }
-            g.addNode(nid, "nav_destination", display(v), s.path, s.line(call), s.module,
+            g.addNode(nid, "nav_destination", display(v), s.path, call.line, s.module,
                 mapOf("route" to display(v), "style" to "string", "route_constant" to constant) + common)
             stringDests[v] = nid
         }
-        fnNode(s, call)?.let { g.addEdge(it, nid, "registers", s.path, s.line(call)) }
+        fnNode(call.fn)?.let { g.addEdge(it, nid, "registers", s.path, call.line) }
         if (name == "navigation") pendingStarts.add(nid to call)
-        call.lambdaArguments.lastOrNull()?.getLambdaExpression()?.let { screen(s, it, nid) }
+        call.lambda?.let { screen(s, it, nid) }
     }
 
+    /** The screen a destination shows: the first project composable its content lambda calls. */
     private fun screen(s: Source, lambda: PsiElement, nid: String) {
-        for (c in lambda.collectDescendantsOfType<KtCallExpression>()) {
-            val n = c.calleeName() ?: continue
-            if (!n.first().isUpperCase() || c.receiverText() != null) continue
-            val f = p.index.resolveMember(n, s, c) as? KtNamedFunction ?: continue
-            val fs = p.index.sourceOf(f) ?: continue
-            val sid = nodeForFun(g, f, fs, "screen") ?: continue
-            g.addEdge(nid, sid, "shows", s.path, s.line(c))
+        for (c in s.calls) {
+            if (!c.isInside(lambda) || c.receiver != null || !c.name.first().isUpperCase()) continue
+            val f = index.resolveMember(c.name, s, c.psi) as? Fn ?: continue
+            val sid = nodeForFun(g, f, "screen") ?: continue
+            g.addEdge(nid, sid, "shows", s.path, c.line)
             return
         }
     }
@@ -230,7 +220,7 @@ class NavScan(private val p: Project, private val g: Graph) {
                     "graph" to flag(el.localName == "navigation"), "dialog" to flag(el.localName == "dialog"),
                     "deep_link" to flag(el.childElements().any { it.localName == "deepLink" }), "class_name" to name))
             xmlIds[key] = nid
-            if (name != null && name in p.index.types) g.addEdge(nid, classId(name), "shows", rel)
+            if (name != null && name in index.types) g.addEdge(nid, classId(name), "shows", rel)
         }
         val start = el.attr(APP_NS, "startDestination")
         if (start != null && nid != null) starts.add(XmlLink(rel, nid, null, start.substringAfter('/')))
@@ -247,7 +237,8 @@ class NavScan(private val p: Project, private val g: Graph) {
     // ----- navigate calls -----
     private fun typeChain(e: KtExpression): String? = when (e) {
         is KtNameReferenceExpression -> e.getReferencedName()
-        is KtCallExpression -> if (e.receiverText() == null) e.calleeName() else null
+        is KtCallExpression -> if ((e.parent as? KtQualifiedExpression)?.selectorExpression == e) null
+            else (e.calleeExpression as? KtNameReferenceExpression)?.getReferencedName()
         is KtClassLiteralExpression -> e.receiverExpression?.text?.filterNot { it.isWhitespace() }
         is KtDotQualifiedExpression -> {
             val r = e.receiverExpression
@@ -255,7 +246,7 @@ class NavScan(private val p: Project, private val g: Graph) {
             val left = if (r is KtNameReferenceExpression || r is KtDotQualifiedExpression) typeChain(r) else null
             val right = when (sel) {
                 is KtNameReferenceExpression -> sel.getReferencedName()
-                is KtCallExpression -> sel.calleeName()
+                is KtCallExpression -> (sel.calleeExpression as? KtNameReferenceExpression)?.getReferencedName()
                 else -> null
             }
             if (left != null && right != null) "$left.$right" else null
@@ -264,29 +255,26 @@ class NavScan(private val p: Project, private val g: Graph) {
     }
 
     /** A navigation argument to a destination node id, or (null, why not). */
-    private fun target(s: Source, e: KtExpression?): Pair<String?, String?> {
+    private fun target(s: Source, e: PsiElement?): Pair<String?, String?> {
         if (e == null) return null to "empty"
-        val text = e.text.filterNot { it.isWhitespace() }
-        Regex("""^R\.id\.(\w+)$""").find(text)?.let { m ->
+        R_ID.find(e.text.filterNot { it.isWhitespace() })?.let { m ->
             val key = m.groupValues[1]
             val nid = xmlActions[key] ?: xmlIds[key]
             return if (nid != null) nid to null else null to "R.id.$key matches no navigation XML id"
         }
-        val chain = typeChain(e)
+        val chain = (e as? KtExpression)?.let { typeChain(it) }
         if (chain != null && chain.substringAfterLast('.').firstOrNull()?.isUpperCase() == true) {
-            val d = p.index.resolveType(chain, s, e)
-            val fq = d?.fq()
-            if (d != null && fq != null) {
-                val nid = typeDests[fq] ?: destId(fq).also { id ->
-                    val ds = p.index.sourceOf(d)
-                    g.addNode(id, "nav_destination", d.name, ds?.path, ds?.line(d), ds?.module,
-                        mapOf("route" to fq, "style" to "type", "registered" to false))
-                    typeDests[fq] = id
+            val d = index.resolveType(chain, s, e)
+            if (d != null) {
+                val nid = typeDests[d.fq] ?: destId(d.fq).also { id ->
+                    g.addNode(id, "nav_destination", d.name, d.src.path, d.line, d.src.module,
+                        mapOf("route" to d.fq, "style" to "type", "registered" to false))
+                    typeDests[d.fq] = id
                 }
                 return nid to null
             }
         }
-        val v = p.eval.eval(e)
+        val v = code.eval.eval(e)
         if (v is String) {
             val (segs, _) = routeSig(v)
             if (segs.all { it == "*" }) return null to "route is dynamic"
@@ -301,75 +289,79 @@ class NavScan(private val p: Project, private val g: Graph) {
     }
 
     /** Functions that navigate to one of their own parameters: fun go(route: String) = navigate(route). */
-    private class Helper(val fn: KtNamedFunction, val param: String, val index: Int)
+    private class Helper(val fn: Fn, val param: String, val index: Int)
     private val helpers = ArrayList<Helper>()
 
     private fun navigateCalls(s: Source) {
         val navFile = s.importsFrom("androidx.navigation")
-        for (call in s.file.collectDescendantsOfType<KtCallExpression> { it.calleeName() == "navigate" || it.calleeName() == "add" }) {
-            val receiver = call.receiverText()
-            if (call.calleeName() == "add" && !(receiver != null && "backstack" in receiver.lowercase())) continue
-            val a = call.valueArguments
-            val arg = a.arg("route", 0) ?: a.arg("key") ?: a.arg("resId") ?: continue
-            val expr = arg.getArgumentExpression()
-            val (nid, reason) = target(s, expr)
+        for (call in s.calls) {
+            if (call.isNew || (call.name != "navigate" && call.name != "add")) continue
+            val receiver = call.receiverName
+            if (call.name == "add" && !(receiver != null && "backstack" in receiver.lowercase())) continue
+            val arg = call.args.arg("route", 0) ?: call.args.arg("key") ?: call.args.arg("resId") ?: continue
+            val (nid, reason) = target(s, arg.expr)
             if (nid == null) {
-                val fn = call.getStrictParentOfType<KtNamedFunction>()
-                val pname = (expr as? KtNameReferenceExpression)?.getReferencedName()
-                val pindex = fn?.valueParameters?.indexOfFirst { it.name == pname } ?: -1
-                if (fn != null && pname != null && pindex >= 0 && p.index.local(pname, call) == null) {
+                val fn = call.fn
+                val pname = plainName(arg.expr)
+                val pindex = fn?.params?.indexOfFirst { it.name == pname } ?: -1
+                if (fn != null && pname != null && pindex >= 0 && index.local(pname, call.psi) == null) {
                     helpers.add(Helper(fn, pname, pindex))
                 } else if (navFile || (receiver != null && "nav" in receiver.lowercase())) {
-                    g.addUnresolved("nav_target", arg.text.take(120), s.path, s.line(call), reason ?: "unknown")
+                    g.addUnresolved("nav_target", arg.text.take(120), s.path, call.line, reason ?: "unknown")
                 }
                 continue
             }
-            fnNode(s, call)?.let { g.addEdge(it, nid, "navigates_to", s.path, s.line(call)) }
+            fnNode(call.fn)?.let { g.addEdge(it, nid, "navigates_to", s.path, call.line) }
         }
+    }
+
+    /** `route` in navigate(route): an unqualified name. */
+    private fun plainName(e: PsiElement?): String? = when (e) {
+        is KtNameReferenceExpression -> e.getReferencedName()
+        is PsiReferenceExpression -> if (e.qualifierExpression == null) e.referenceName else null
+        else -> null
     }
 
     /** Calls to navigation helpers, resolved through the argument passed for the route parameter. */
     private fun helperCalls() {
         if (helpers.isEmpty()) return
         val byName = helpers.groupBy { it.fn.name }
-        for (s in files()) for (call in s.file.collectDescendantsOfType<KtCallExpression> { it.calleeName() in byName }) {
-            val callee = p.index.resolveMember(call.calleeName()!!, s, call) as? KtNamedFunction
-            val h = byName[call.calleeName()]!!.firstOrNull { it.fn == callee } ?: byName[call.calleeName()]!!.singleOrNull() ?: continue
-            if (call.getStrictParentOfType<KtNamedFunction>() == h.fn) continue
-            val arg = call.valueArguments.arg(h.param, h.index) ?: continue
-            val (nid, reason) = target(s, arg.getArgumentExpression())
+        for (s in files) for (call in s.calls) {
+            val hs = byName[call.name] ?: continue
+            if (call.isNew) continue
+            val callee = index.resolveMember(call.name, s, call.psi) as? Fn
+            val h = hs.firstOrNull { it.fn === callee } ?: hs.singleOrNull() ?: continue
+            if (call.fn === h.fn) continue
+            val arg = call.args.arg(h.param, h.index) ?: continue
+            val (nid, reason) = target(s, arg.expr)
             if (nid == null) {
-                g.addUnresolved("nav_target", "${call.calleeName()}(${arg.text.take(100)})", s.path, s.line(call), reason ?: "unknown")
+                g.addUnresolved("nav_target", "${call.name}(${arg.text.take(100)})", s.path, call.line, reason ?: "unknown")
                 continue
             }
-            fnNode(s, call)?.let { g.addEdge(it, nid, "navigates_to", s.path, s.line(call), mapOf("via" to h.fn.name)) }
+            fnNode(call.fn)?.let { g.addEdge(it, nid, "navigates_to", s.path, call.line, mapOf("via" to h.fn.name)) }
         }
     }
 
     private fun starts(s: Source) {
-        val args = ArrayList<Pair<KtValueArgument, PsiElement>>()
-        for (a in s.file.collectDescendantsOfType<KtValueArgument> { it.name() in START_ARGS }) {
-            val call = a.parent?.parent as? KtCallExpression
-            if (call != null && call.calleeName() == "navigation") continue // a graph's own start, below
-            args.add(a to a)
+        class Start(val arg: Arg, val call: Call, val at: PsiElement)
+        val found = ArrayList<Start>()
+        for (call in s.calls) {
+            // NavHost(startDestination = ...), rememberNavBackStack(Home) and NavHost(navController, "home");
+            // a graph's own start is linked with the graph below.
+            if (call.name != "navigation") for (a in call.args) if (a.name in START_ARGS) found.add(Start(a, call, a.psi))
+            if (call.name in BACKSTACK_STARTS) call.args.arg(null, 0)?.let { found.add(Start(it, call, call.psi)) }
+            if (call.name == "NavHost") call.args.arg("startDestination", 1)?.takeIf { it.name == null }?.let { found.add(Start(it, call, call.psi)) }
         }
-        for (c in s.file.collectDescendantsOfType<KtCallExpression> { it.calleeName() in BACKSTACK_STARTS }) {
-            c.valueArguments.arg(null, 0)?.let { args.add(it to c) }
-        }
-        // NavHost(navController, "home"): the start destination passed by position (named ones are found above).
-        for (c in s.file.collectDescendantsOfType<KtCallExpression> { it.calleeName() == "NavHost" }) {
-            c.valueArguments.arg("startDestination", 1)?.takeIf { it.name() == null }?.let { args.add(it to c) }
-        }
-        for ((a, at) in args) {
-            val (nid, _) = target(s, a.getArgumentExpression())
-            val src = fnNode(s, at)
-            if (nid != null && src != null) g.addEdge(src, nid, "starts_at", s.path, s.line(at))
+        for (st in found) {
+            val (nid, _) = target(s, st.arg.expr)
+            val src = fnNode(st.call.fn)
+            if (nid != null && src != null) g.addEdge(src, nid, "starts_at", s.path, s.line(st.at))
         }
         for ((nid, call) in pendingStarts) {
-            if (call.containingFile != s.file) continue
-            val a = call.valueArguments.arg("startDestination", 0) ?: continue
-            val (tid, _) = target(s, a.getArgumentExpression())
-            if (tid != null) g.addEdge(nid, tid, "starts_at", s.path, s.line(call))
+            if (call.src !== s) continue
+            val a = call.args.arg("startDestination", 0) ?: continue
+            val (tid, _) = target(s, a.expr)
+            if (tid != null) g.addEdge(nid, tid, "starts_at", s.path, call.line)
         }
     }
 
@@ -377,14 +369,12 @@ class NavScan(private val p: Project, private val g: Graph) {
     private fun routeReferences() {
         val constants = stringDests.values.mapNotNull { nid -> g.nodes[nid]?.attrs?.get("route_constant")?.let { nid to it as String } }
         if (typeDests.isEmpty() && constants.isEmpty()) return
-        val counts = ReferenceCounts(p, includeTests = false)
-        for ((fq, nid) in typeDests) {
+        val counts = code.references(includeTests = false)
+        fun refs(nid: String, name: String) {
             val regs = g.inEdges(nid).count { it.kind == "registers" }
-            g.nodes[nid]!!.attrs["references"] = maxOf(0, counts[fq.substringAfterLast('.')] - regs)
+            g.nodes[nid]!!.attrs["references"] = maxOf(0, (counts[name] ?: 0) - regs)
         }
-        for ((nid, name) in constants) {
-            val regs = g.inEdges(nid).count { it.kind == "registers" }
-            g.nodes[nid]!!.attrs["references"] = maxOf(0, counts[name] - regs)
-        }
+        for ((fq, nid) in typeDests) refs(nid, fq.substringAfterLast('.'))
+        for ((nid, name) in constants) refs(nid, name)
     }
 }

@@ -1,5 +1,6 @@
 package droidmap.extract
 
+import droidmap.Code
 import droidmap.Graph
 import droidmap.Project
 import droidmap.sourceSetOf
@@ -10,15 +11,10 @@ private val NAMESPACE = Regex("""\bnamespace\s*=?\s*["']([\w.]+)["']""")
 fun permId(name: String) = "perm::$name"
 
 /** AndroidManifest.xml (source manifests, not the merged one): permissions and components. */
-class ManifestScan(private val p: Project, private val g: Graph) {
-    private fun namespace(module: String): String? {
-        val dir = p.modules[module] ?: return null
-        for (name in listOf("build.gradle.kts", "build.gradle")) {
-            val rel = if (dir.isEmpty()) name else "$dir/$name"
-            if (rel in p.gradlePaths) NAMESPACE.find(p.read(rel))?.let { return it.groupValues[1] }
-        }
-        return null
-    }
+class ManifestScan(private val p: Project, private val code: Code, private val g: Graph) {
+    /** The module's android { namespace = "..." }, from its build file. */
+    private fun namespace(module: String): String? =
+        g.nodes[moduleId(module)]?.file?.let { NAMESPACE.find(p.read(it))?.groupValues?.get(1) }
 
     fun run() {
         for (rel in p.manifestPaths) {
@@ -31,10 +27,9 @@ class ManifestScan(private val p: Project, private val g: Graph) {
             for (el in root.childElements()) {
                 if (el.localName !in setOf("uses-permission", "uses-permission-sdk-23")) continue
                 val name = el.attr(ANDROID_NS, "name") ?: continue
-                val removed = el.attr(TOOLS_NS, "node") == "remove"
                 g.addNode(permId(name), "permission", name.substringAfterLast('.'))
                 g.addEdge(mid, permId(name), "uses_permission", rel, null, mapOf(
-                    "source_set" to ss, "max_sdk" to el.attr(ANDROID_NS, "maxSdkVersion"), "removed" to (if (removed) true else null)))
+                    "source_set" to ss, "max_sdk" to el.attr(ANDROID_NS, "maxSdkVersion"), "removed" to flag(el.attr(TOOLS_NS, "node") == "remove")))
             }
             val app = root.childElements().firstOrNull { it.localName == "application" } ?: continue
             app.attr(ANDROID_NS, "name")?.let { n ->
@@ -50,9 +45,8 @@ class ManifestScan(private val p: Project, private val g: Graph) {
                 val actions = el.childElements().filter { it.localName == "intent-filter" }
                     .flatMap { f -> f.childElements().filter { it.localName == "action" }.mapNotNull { it.attr(ANDROID_NS, "name") } }
                     .toSortedSet().toList()
-                val decl = p.index.types[fq]
-                val ds = decl?.let { p.index.sourceOf(it) }
-                g.addNode(classId(fq), "component", fq.substringAfterLast('.'), ds?.path, decl?.let { ds?.line(it) }, module,
+                val decl = code.index.types[fq]
+                g.addNode(classId(fq), "component", fq.substringAfterLast('.'), decl?.src?.path, decl?.line, module,
                     mapOf("component" to el.localName))
                 g.addEdge(mid, classId(fq), "declares", rel, null, mapOf(
                     "source_set" to ss, "type" to el.localName, "exported" to el.attr(ANDROID_NS, "exported"),

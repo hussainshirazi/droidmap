@@ -253,7 +253,7 @@ class GradleScan(private val p: Project, private val g: Graph) {
             }
             if (registrations.isEmpty()) continue
             val classes = HashMap<String, String>()
-            for (rel in p.ktPaths.filter { it.startsWith(prefix) }) {
+            for (rel in (p.ktPaths + p.javaPaths).filter { it.startsWith(prefix) }) {
                 val text = p.read(rel)
                 for (cls in registrations.values) {
                     if (Regex("\\bclass\\s+${Regex.escape(cls.substringAfterLast('.'))}\\b").containsMatchIn(text)) classes[cls] = rel
@@ -286,7 +286,7 @@ class GradleScan(private val p: Project, private val g: Graph) {
             val build = listOf("build.gradle.kts", "build.gradle").map { if (dir.isEmpty()) it else "$dir/$it" }
                 .firstOrNull { it in p.gradlePaths }
             g.addNode(moduleId(path), "module", path, build, if (build != null) 1 else null, path,
-                mapOf("dir" to dir, "missing_build_file" to (if (build == null) true else null)))
+                mapOf("dir" to dir, "missing_build_file" to flag(build == null)))
         }
         for (path in modules.keys.sorted()) {
             val build = g.nodes[moduleId(path)]!!.file ?: continue
@@ -305,7 +305,6 @@ class GradleScan(private val p: Project, private val g: Graph) {
             g.addUnresolved("gradle_project", dst, file, line, "$src depends on a project not in settings")
             g.addNode(moduleId(dst), "module", dst, module = dst, attrs = mapOf("missing" to true))
         }
-        val test = if ("test" in conf.lowercase()) true else null
-        g.addEdge(moduleId(src), moduleId(dst), "depends_on", file, line, mapOf("configuration" to conf, "via" to via, "test" to test))
+        g.addEdge(moduleId(src), moduleId(dst), "depends_on", file, line, mapOf("configuration" to conf, "via" to via, "test" to flag("test" in conf.lowercase())))
     }
 }

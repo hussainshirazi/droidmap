@@ -205,7 +205,7 @@ private fun gradle(g: Graph, config: Config): List<Finding> {
             if (e.attrs.bool("test") && rule["tests"] != true) continue
             val s = g.label(e.source)
             val t = g.label(e.target)
-            if (s == t || !fnmatch(s, from) || !fnmatch(t, to)) continue
+            if (s == t || !glob(s, from) || !glob(t, to)) continue
             if (rule["allow_same_parent"] == true && s.substringBeforeLast(':') == t.substringBeforeLast(':')) continue
             val reason = (rule["reason"] as? String)?.let { ": $it" } ?: ""
             val via = e.attrs.str("via")?.let { " (added by plugin $it)" } ?: ""

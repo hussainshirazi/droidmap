@@ -1,152 +1,93 @@
 package droidmap
 
+import org.jetbrains.kotlin.com.intellij.psi.JavaTokenType
 import org.jetbrains.kotlin.com.intellij.psi.PsiElement
+import org.jetbrains.kotlin.com.intellij.psi.PsiExpression
+import org.jetbrains.kotlin.com.intellij.psi.PsiFile
+import org.jetbrains.kotlin.com.intellij.psi.PsiLiteralExpression
+import org.jetbrains.kotlin.com.intellij.psi.PsiMethod
+import org.jetbrains.kotlin.com.intellij.psi.PsiMethodCallExpression
+import org.jetbrains.kotlin.com.intellij.psi.PsiParenthesizedExpression
+import org.jetbrains.kotlin.com.intellij.psi.PsiPolyadicExpression
+import org.jetbrains.kotlin.com.intellij.psi.PsiPrefixExpression
+import org.jetbrains.kotlin.com.intellij.psi.PsiReferenceExpression
+import org.jetbrains.kotlin.com.intellij.psi.PsiReturnStatement
+import org.jetbrains.kotlin.com.intellij.psi.util.PsiTreeUtil
 import org.jetbrains.kotlin.lexer.KtTokens
-import org.jetbrains.kotlin.psi.KtAnnotated
-import org.jetbrains.kotlin.psi.KtAnnotationEntry
 import org.jetbrains.kotlin.psi.KtBinaryExpression
 import org.jetbrains.kotlin.psi.KtCallExpression
-import org.jetbrains.kotlin.psi.KtCallableDeclaration
-import org.jetbrains.kotlin.psi.KtClassOrObject
 import org.jetbrains.kotlin.psi.KtConstantExpression
 import org.jetbrains.kotlin.psi.KtDotQualifiedExpression
 import org.jetbrains.kotlin.psi.KtEscapeStringTemplateEntry
 import org.jetbrains.kotlin.psi.KtExpression
-import org.jetbrains.kotlin.psi.KtFile
-import org.jetbrains.kotlin.psi.KtFunctionType
 import org.jetbrains.kotlin.psi.KtLiteralStringTemplateEntry
 import org.jetbrains.kotlin.psi.KtNameReferenceExpression
 import org.jetbrains.kotlin.psi.KtNamedFunction
-import org.jetbrains.kotlin.psi.KtNullableType
-import org.jetbrains.kotlin.psi.KtObjectDeclaration
 import org.jetbrains.kotlin.psi.KtParenthesizedExpression
 import org.jetbrains.kotlin.psi.KtPrefixExpression
-import org.jetbrains.kotlin.psi.KtProperty
 import org.jetbrains.kotlin.psi.KtReturnExpression
 import org.jetbrains.kotlin.psi.KtStringTemplateEntryWithExpression
 import org.jetbrains.kotlin.psi.KtStringTemplateExpression
-import org.jetbrains.kotlin.psi.KtTreeVisitorVoid
-import org.jetbrains.kotlin.psi.KtTypeElement
-import org.jetbrains.kotlin.psi.KtTypeReference
-import org.jetbrains.kotlin.psi.KtUserType
-import org.jetbrains.kotlin.psi.KtValueArgument
-import org.jetbrains.kotlin.psi.psiUtil.collectDescendantsOfType
-import org.jetbrains.kotlin.psi.psiUtil.containingClassOrObject
-import org.jetbrains.kotlin.psi.psiUtil.getStrictParentOfType
 import java.util.IdentityHashMap
+import java.util.concurrent.Callable
+import java.util.concurrent.CompletableFuture
+import java.util.concurrent.ExecutionException
+import java.util.concurrent.Executors
+import java.util.concurrent.Future
 
 /** Marks an unknown part of an evaluated string (a template or call we could not resolve). */
 const val WILD = ''
 
-data class TypeRef(val name: String, val args: List<TypeRef> = emptyList(), val nullable: Boolean = false, val fn: Boolean = false) {
-    val simple get() = name.substringAfterLast('.')
-
-    /** Provider<T> and Lazy<T> (javax/dagger) inject T. */
-    fun unwrapped(): TypeRef {
-        var t = this
-        while (t.simple in setOf("Provider", "Lazy") && t.args.size == 1) t = t.args[0]
-        return t
-    }
-
-    override fun toString(): String =
-        name + (if (args.isNotEmpty()) args.joinToString(", ", "<", ">") else "") + (if (nullable) "?" else "")
-
-    companion object {
-        fun of(ref: KtTypeReference?): TypeRef? = ref?.typeElement?.let { of(it) }
-
-        fun of(el: KtTypeElement): TypeRef? = when (el) {
-            is KtNullableType -> el.innerType?.let { of(it) }?.copy(nullable = true)
-            is KtFunctionType -> TypeRef("Function", fn = true)
-            is KtUserType -> {
-                val names = ArrayList<String>()
-                var u: KtUserType? = el
-                while (u != null) { names.add(u.referencedName ?: "?"); u = u.qualifier }
-                TypeRef(names.reversed().joinToString("."), el.typeArgumentsAsTypes.mapNotNull { of(it) })
-            }
-            else -> null
-        }
-    }
-}
-
-// ----- small PSI helpers -----
-fun KtAnnotationEntry.simpleName(): String = shortName?.asString() ?: ""
-fun KtAnnotated.ann(simple: String): KtAnnotationEntry? = annotationEntries.firstOrNull { it.simpleName() == simple }
-fun KtAnnotated.hasAnn(vararg simple: String): Boolean = annotationEntries.any { it.simpleName() in simple }
-fun KtCallExpression.calleeName(): String? = (calleeExpression as? KtNameReferenceExpression)?.getReferencedName()
-fun KtValueArgument.name(): String? = getArgumentName()?.asName?.asString()
-
-/** A named argument, or else the positional one at [pos] (counting unnamed, non-lambda arguments). */
-fun List<KtValueArgument>.arg(name: String? = null, pos: Int? = null): KtValueArgument? {
-    if (name != null) firstOrNull { it.name() == name }?.let { return it }
-    if (pos != null) return filter { it.name() == null && it !is org.jetbrains.kotlin.psi.KtLambdaArgument }.getOrNull(pos)
-    return null
-}
-
-fun KtCallExpression.receiverText(): String? {
-    val p = parent
-    if (p is org.jetbrains.kotlin.psi.KtQualifiedExpression && p.selectorExpression == this) {
-        val r = p.receiverExpression
-        return (r as? KtNameReferenceExpression)?.getReferencedName() ?: r.text.substringAfterLast('.')
-    }
-    return null
-}
-
-/** Enclosing classes and objects, innermost first (starting with [el] itself when it is one). */
-fun classChain(el: PsiElement?): List<KtClassOrObject> {
-    val out = ArrayList<KtClassOrObject>()
-    var p: PsiElement? = el
-    while (p != null && p !is KtFile) {
-        if (p is KtClassOrObject && !(p is KtObjectDeclaration && p.isObjectLiteral())) out.add(p)
-        p = p.parent
-    }
-    return out
-}
-
-fun KtClassOrObject.fq(): String? = fqName?.asString()
-
-class Index(val sources: List<Source>) {
-    val types = HashMap<String, KtClassOrObject>()
-    val bySimple = HashMap<String, MutableList<KtClassOrObject>>()
-    val members = HashMap<String, MutableList<KtCallableDeclaration>>()
-    private val sourceByFile = IdentityHashMap<KtFile, Source>()
+/** Name resolution over the project's own declarations: through imports, the package, enclosing classes and unique simple names. */
+class Index(sources: List<Source>) {
+    val types = HashMap<String, Type>()
+    private val bySimple = HashMap<String, MutableList<Type>>()
+    private val members = HashMap<String, MutableList<Decl>>()
+    private val sourceByFile = IdentityHashMap<PsiFile, Source>()
+    private val typeByPsi = IdentityHashMap<PsiElement, Type>()
+    private val fnByPsi = IdentityHashMap<PsiElement, Fn>()
 
     init {
         for (s in sources) {
-            sourceByFile[s.file] = s
-            s.file.accept(object : KtTreeVisitorVoid() {
-                override fun visitClassOrObject(c: KtClassOrObject) {
-                    super.visitClassOrObject(c)
-                    val fq = c.fq() ?: return
-                    if (c is KtObjectDeclaration && c.isObjectLiteral()) return
-                    types.putIfAbsent(fq, c)
-                    if (!(c is KtObjectDeclaration && c.isCompanion())) c.name?.let { bySimple.getOrPut(it) { ArrayList() }.add(c) }
+            sourceByFile[s.psi] = s
+            for (t in s.types) {
+                typeByPsi[t.psi] = t
+                val prev = types[t.fq]
+                if (prev == null || (prev.isExpect && !t.isExpect)) types[t.fq] = t // the first one, or an actual over its expect
+                if (t.kind != TypeKind.COMPANION) t.name?.let { n ->
+                    val same = bySimple.getOrPut(n) { ArrayList() }
+                    if (same.none { it.fq == t.fq }) same.add(t)
                 }
-
-                override fun visitNamedFunction(f: KtNamedFunction) {
-                    super.visitNamedFunction(f)
-                    if (!f.isLocal) addMember(f)
-                }
-
-                override fun visitProperty(p: KtProperty) {
-                    super.visitProperty(p)
-                    if (!p.isLocal) addMember(p)
-                }
-            })
+            }
+            for (f in s.fns) {
+                fnByPsi[f.psi] = f
+                if (f.fq != null) addMember(f.fq, f, f.owner)
+            }
+            for (f in s.fields) if (f.fq != null && !f.isLocal && !f.isParam) addMember(f.fq, f, f.owner)
         }
     }
 
-    private fun addMember(d: KtCallableDeclaration) {
-        val fq = d.fqName?.asString() ?: return
+    private fun addMember(fq: String, d: Decl, owner: Type?) {
         members.getOrPut(fq) { ArrayList() }.add(d)
-        val owner = d.containingClassOrObject
-        if (owner is KtObjectDeclaration && owner.isCompanion()) {
-            owner.containingClassOrObject?.fq()?.let { members.getOrPut("$it.${d.name}") { ArrayList() }.add(d) }
-        }
+        if (owner?.kind == TypeKind.COMPANION) owner.outer?.let { members.getOrPut("${it.fq}.${d.name}") { ArrayList() }.add(d) }
     }
 
-    fun sourceOf(el: PsiElement): Source? = sourceByFile[el.containingFile as? KtFile]
+    private fun pick(ds: List<Decl>): Decl = ds.firstOrNull { !(it is Fn && it.isExpect) && !(it is Field && it.isExpect) } ?: ds[0]
 
-    fun resolveType(name: String, src: Source, scope: PsiElement?): KtClassOrObject? {
+    fun sourceOf(el: PsiElement): Source? = sourceByFile[el.containingFile]
+
+    /** The types around [el], innermost first (starting with [el] itself when it is one). */
+    fun typesAround(el: PsiElement?): List<Type> {
+        val out = ArrayList<Type>()
+        var p = el
+        while (p != null && p !is PsiFile) {
+            typeByPsi[p]?.let { out.add(it) }
+            p = p.parent
+        }
+        return out
+    }
+
+    fun resolveType(name: String, src: Source, scope: PsiElement?): Type? {
         if (name.isEmpty()) return null
         types[name]?.let { return it }
         val first = name.substringBefore('.')
@@ -154,40 +95,39 @@ class Index(val sources: List<Source>) {
         val suffix = if (rest.isEmpty()) "" else ".$rest"
         val cands = ArrayList<String>()
         src.imports[first]?.let { cands.add(it) }
-        for (c in classChain(scope)) c.fq()?.let { cands.add("$it.$first") }
+        for (t in typesAround(scope)) cands.add("${t.fq}.$first")
         cands.add(if (src.pkg.isEmpty()) first else "${src.pkg}.$first")
         src.starImports.forEach { cands.add("$it.$first") }
         for (c in cands) types[c + suffix]?.let { return it }
         if (first in src.imports) return null // imported from outside the project
         val same = bySimple[first] ?: return null
         if (same.size != 1) return null
-        return if (rest.isEmpty()) same[0] else same[0].fq()?.let { types[it + suffix] }
+        return if (rest.isEmpty()) same[0] else types[same[0].fq + suffix]
     }
 
-    fun resolveMember(chain: String, src: Source, scope: PsiElement?): KtCallableDeclaration? {
-        members[chain]?.let { return it[0] }
+    fun resolveMember(chain: String, src: Source, scope: PsiElement?): Decl? {
+        members[chain]?.let { return pick(it) }
         val head = chain.substringBeforeLast('.', "")
         val last = chain.substringAfterLast('.')
         if (head.isNotEmpty()) {
-            val t = resolveType(head, src, scope)?.fq() ?: return null
-            return (members["$t.$last"] ?: members["$t.Companion.$last"])?.get(0)
+            val t = resolveType(head, src, scope)?.fq ?: return null
+            return (members["$t.$last"] ?: members["$t.Companion.$last"])?.let { pick(it) }
         }
         val cands = ArrayList<String>()
         src.imports[last]?.let { cands.add(it) }
-        for (c in classChain(scope)) c.fq()?.let { cands.add("$it.$last"); cands.add("$it.Companion.$last") }
+        for (t in typesAround(scope)) { cands.add("${t.fq}.$last"); cands.add("${t.fq}.Companion.$last") }
         cands.add(if (src.pkg.isEmpty()) last else "${src.pkg}.$last")
         src.starImports.forEach { cands.add("$it.$last") }
-        for (c in cands) members[c]?.let { return it[0] }
+        for (c in cands) members[c]?.let { return pick(it) }
         return null
     }
 
-    /** The nearest local val/var with this name declared before [at] in a function that encloses it. */
-    fun local(name: String, at: PsiElement): KtProperty? {
-        var fn = at.getStrictParentOfType<KtNamedFunction>()
-        while (fn != null) {
-            fn.collectDescendantsOfType<KtProperty> { it.isLocal && it.name == name && it.textOffset < at.textOffset }
-                .lastOrNull()?.let { return it }
-            fn = fn.getStrictParentOfType()
+    /** The nearest local val or var named [name] declared before [at] in a function around it. */
+    fun local(name: String, at: PsiElement): Field? {
+        var p: PsiElement? = at.parent
+        while (p != null && p !is PsiFile) {
+            fnByPsi[p]?.locals?.lastOrNull { it.name == name && it.psi.textOffset < at.textOffset }?.let { return it }
+            p = p.parent
         }
         return null
     }
@@ -207,48 +147,64 @@ fun parseIntLiteral(text: String): Long? {
 }
 
 /**
- * Evaluates constant expressions: literals, string templates, `+`, const references and calls
- * to functions whose body is one expression or one return. Unknown parts of a string become
- * WILD; an expression that is entirely unknown is null. Numbers are Long.
+ * Evaluates constant expressions in Kotlin and Java: literals, string templates, `+`, references to
+ * vals (Kotlin) and final fields or effectively final locals (Java), and calls to functions whose body
+ * is one expression or one return. Unknown parts of a string become WILD; an expression that is entirely
+ * unknown is null. Numbers are Long.
  */
 class Evaluator(private val index: Index) {
     private val memo = HashMap<PsiElement, Any?>()
     private val active = HashSet<PsiElement>()
 
-    fun eval(e: KtExpression?, depth: Int = 0): Any? {
-        if (e == null || depth > 12) return null
+    fun eval(e: PsiElement?, depth: Int = 0): Any? {
+        if (e == null || depth > MAX_DEPTH) return null
         return when (e) {
-            is KtStringTemplateExpression -> buildString {
-                for (entry in e.entries) when (entry) {
-                    is KtLiteralStringTemplateEntry -> append(entry.text)
-                    is KtEscapeStringTemplateEntry -> append(entry.unescapedValue)
-                    is KtStringTemplateEntryWithExpression -> {
-                        val v = eval(entry.expression, depth + 1)
-                        append(if (v is String || v is Long) v.toString() else WILD.toString())
-                    }
-                    else -> append(WILD)
-                }
-            }
-            is KtConstantExpression -> when (e.text) {
-                "true" -> true
-                "false" -> false
-                else -> parseIntLiteral(e.text)
-            }
-            is KtParenthesizedExpression -> eval(e.expression, depth + 1)
-            is KtPrefixExpression -> if (e.operationToken == KtTokens.MINUS) (eval(e.baseExpression, depth + 1) as? Long)?.let { -it } else null
-            is KtBinaryExpression -> if (e.operationToken == KtTokens.PLUS) plus(eval(e.left, depth + 1), eval(e.right, depth + 1)) else null
-            is KtNameReferenceExpression -> valueOf(e.getReferencedName(), e, depth)
-            is KtDotQualifiedExpression -> {
-                val sel = e.selectorExpression
-                val chain = chain(e) ?: return null
-                if (sel is KtCallExpression) call(chain, e, depth) else valueOf(chain, e, depth)
-            }
-            is KtCallExpression -> e.calleeName()?.let { call(it, e, depth) }
+            is KtExpression -> kotlin(e, depth)
+            is PsiExpression -> java(e, depth)
             else -> null
         }
     }
 
-    fun evalInt(e: KtExpression?): Int? = (eval(e) as? Long)?.toInt()
+    fun evalInt(e: PsiElement?): Int? = (eval(e) as? Long)?.toInt()
+
+    private fun kotlin(e: KtExpression, depth: Int): Any? = when (e) {
+        is KtStringTemplateExpression -> buildString {
+            for (entry in e.entries) when (entry) {
+                is KtLiteralStringTemplateEntry -> append(entry.text)
+                is KtEscapeStringTemplateEntry -> append(entry.unescapedValue)
+                is KtStringTemplateEntryWithExpression -> append(part(eval(entry.expression, depth + 1)))
+                else -> append(WILD)
+            }
+        }
+        is KtConstantExpression -> when (e.text) {
+            "true" -> true
+            "false" -> false
+            else -> parseIntLiteral(e.text)
+        }
+        is KtParenthesizedExpression -> eval(e.expression, depth + 1)
+        is KtPrefixExpression -> if (e.operationToken == KtTokens.MINUS) (eval(e.baseExpression, depth + 1) as? Long)?.let { -it } else null
+        is KtBinaryExpression -> if (e.operationToken == KtTokens.PLUS) plus(eval(e.left, depth + 1), eval(e.right, depth + 1)) else null
+        is KtNameReferenceExpression -> valueOf(e.getReferencedName(), e, depth)
+        is KtDotQualifiedExpression -> kotlinChain(e)?.let { chain ->
+            if (e.selectorExpression is KtCallExpression) call(chain, e, depth) else valueOf(chain, e, depth)
+        }
+        is KtCallExpression -> (e.calleeExpression as? KtNameReferenceExpression)?.let { call(it.getReferencedName(), e, depth) }
+        else -> null
+    }
+
+    private fun java(e: PsiExpression, depth: Int): Any? = when (e) {
+        is PsiLiteralExpression -> when (val v = e.value) {
+            is String, is Boolean, is Long -> v
+            is Int -> v.toLong()
+            else -> null
+        }
+        is PsiParenthesizedExpression -> eval(e.expression, depth + 1)
+        is PsiPrefixExpression -> if (e.operationTokenType == JavaTokenType.MINUS) (eval(e.operand, depth + 1) as? Long)?.let { -it } else null
+        is PsiPolyadicExpression -> if (e.operationTokenType == JavaTokenType.PLUS) e.operands.map { eval(it, depth + 1) }.reduce(::plus) else null
+        is PsiReferenceExpression -> javaChain(e)?.let { valueOf(it, e, depth) }
+        is PsiMethodCallExpression -> javaChain(e.methodExpression)?.let { call(it, e, depth) }
+        else -> null
+    }
 
     private fun plus(a: Any?, b: Any?): Any? = when {
         a is Long && b is Long -> a + b
@@ -259,48 +215,118 @@ class Evaluator(private val index: Index) {
     private fun part(v: Any?): String = if (v is String || v is Long) v.toString() else WILD.toString()
 
     /** "a.b.C" for a.b.C or a.b.C(...); null when a part is not a plain name. */
-    private fun chain(e: KtExpression?): String? = when (e) {
+    private fun kotlinChain(e: KtExpression?): String? = when (e) {
         is KtNameReferenceExpression -> e.getReferencedName()
-        is KtCallExpression -> e.calleeName()
+        is KtCallExpression -> (e.calleeExpression as? KtNameReferenceExpression)?.getReferencedName()
         is KtDotQualifiedExpression -> {
-            val r = chain(e.receiverExpression)
-            val s = chain(e.selectorExpression)
+            val r = kotlinChain(e.receiverExpression)
+            val s = kotlinChain(e.selectorExpression)
             if (r != null && s != null) "$r.$s" else null
         }
         else -> null
     }
 
+    private fun javaChain(e: PsiReferenceExpression): String? {
+        val name = e.referenceName ?: return null
+        val q = e.qualifierExpression ?: return name
+        return (q as? PsiReferenceExpression)?.let { javaChain(it) }?.let { "$it.$name" }
+    }
+
     private fun valueOf(chain: String, at: PsiElement, depth: Int): Any? {
         val src = index.sourceOf(at) ?: return null
-        val d: KtCallableDeclaration? = (if ('.' !in chain) index.local(chain, at) else null) ?: index.resolveMember(chain, src, at)
-        val p = d as? KtProperty ?: return null
-        if (p.isVar) return null // may be reassigned: not a constant
-        val init = p.initializer ?: return null
-        return memoized(p, depth) { eval(init, depth + 1) }
+        val d = (if ('.' !in chain) index.local(chain, at) else null) ?: index.resolveMember(chain, src, at)
+        val f = d as? Field ?: return null
+        if (!f.isConstant) return null // may be reassigned: not a constant
+        val init = f.initializer ?: return null
+        return memoized(f.psi, depth) { eval(init, depth + 1) }
     }
 
     private fun call(chain: String, at: PsiElement, depth: Int): Any? {
         val src = index.sourceOf(at) ?: return null
-        val f = index.resolveMember(chain, src, at) as? KtNamedFunction ?: return null
-        return memoized(f, depth) {
-            if (f.hasBlockBody()) {
-                val returns = f.bodyBlockExpression?.collectDescendantsOfType<KtReturnExpression>() ?: emptyList()
-                if (returns.size == 1) eval(returns[0].returnedExpression, depth + 1) else null
-            } else {
-                eval(f.bodyExpression, depth + 1)
-            }
-        }
+        val f = index.resolveMember(chain, src, at) as? Fn ?: return null
+        return memoized(f.psi, depth) { eval(returned(f.psi), depth + 1) }
+    }
+
+    /** The expression a function returns: its expression body, or its only return. */
+    private fun returned(f: PsiElement): PsiElement? = when (f) {
+        is KtNamedFunction -> if (f.hasBlockBody()) {
+            PsiTreeUtil.findChildrenOfType(f.bodyBlockExpression, KtReturnExpression::class.java).singleOrNull()?.returnedExpression
+        } else f.bodyExpression
+        is PsiMethod -> PsiTreeUtil.findChildrenOfType(f.body, PsiReturnStatement::class.java).singleOrNull()?.returnValue
+        else -> null
     }
 
     private fun memoized(key: PsiElement, depth: Int, compute: () -> Any?): Any? {
         if (memo.containsKey(key)) return memo[key]
-        if (!active.add(key) || depth > 12) return null
+        if (!active.add(key) || depth > MAX_DEPTH) return null
         try {
             val v = compute()
             memo[key] = v
             return v
         } finally {
             active.remove(key)
+        }
+    }
+
+    private companion object {
+        const val MAX_DEPTH = 12
+    }
+}
+
+/** The project's parsed sources, with name resolution and constant evaluation over them. */
+class Code(val sources: List<Source>) {
+    val index = Index(sources)
+    val eval = Evaluator(index)
+    private val references = arrayOfNulls<Map<String, Int>>(2)
+
+    /** How often each simple name is referred to in code (imports and package lines excluded). */
+    fun references(includeTests: Boolean): Map<String, Int> {
+        val k = if (includeTests) 1 else 0
+        references[k]?.let { return it }
+        val counts = HashMap<String, Int>()
+        for (s in sources) if (includeTests || !s.isTest) s.names.forEach { (n, c) -> counts.merge(n, c, Int::plus) }
+        return counts.also { references[k] = it }
+    }
+
+    companion object {
+        private const val STACK_BYTES = 16L shl 20 // deeply nested expressions recurse deeply
+
+        /**
+         * Parses the project's Kotlin and Java files, several at a time. A file that has not changed
+         * since [previous] (same size, modification time and module) is taken from it, not parsed again.
+         */
+        fun read(p: Project, previous: Code? = null): Code {
+            val reuse = previous?.sources?.associateBy { it.path } ?: emptyMap()
+            val paths = (p.ktPaths + p.javaPaths).sorted()
+            val pool = Executors.newFixedThreadPool(Runtime.getRuntime().availableProcessors().coerceIn(1, 8)) { r ->
+                Thread(null, r, "droidmap-parse", STACK_BYTES).apply { isDaemon = true }
+            }
+            try {
+                val jobs: List<Future<Source>> = paths.map { rel ->
+                    val module = p.moduleOf(rel)
+                    val old = reuse[rel]?.takeIf { it.stamp == p.stamp(rel) && it.module == module }
+                    if (old != null) CompletableFuture.completedFuture(old) else pool.submit(Callable { readSource(p, rel, module) })
+                }
+                val sources = ArrayList<Source>()
+                for ((rel, job) in paths.zip(jobs)) {
+                    try {
+                        sources.add(job.get())
+                    } catch (e: ExecutionException) {
+                        p.skipped.add(rel) // unreadable
+                    }
+                }
+                return Code(sources)
+            } finally {
+                pool.shutdownNow()
+            }
+        }
+
+        private fun readSource(p: Project, rel: String, module: String?): Source {
+            val text = p.read(rel)
+            val ss = sourceSetOf(rel)
+            val s = if (rel.endsWith(".java")) JavaReader.read(rel, module, ss, text) else KotlinReader.read(rel, module, ss, text)
+            s.stamp = p.stamp(rel)
+            return s
         }
     }
 }

@@ -2,8 +2,6 @@ package droidmap
 
 import droidmap.extract.GradleLexer
 import droidmap.extract.routeMatches
-import org.jetbrains.kotlin.psi.KtProperty
-import org.jetbrains.kotlin.psi.psiUtil.collectDescendantsOfType
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -11,7 +9,7 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class KotlinTest {
-    private fun source(path: String, text: String) = Source(path, null, "main", KotlinPsi.parse(path, text))
+    private fun source(path: String, text: String) = KotlinReader.read(path, null, "main", text)
 
     @Test
     fun evaluatorResolvesConstantsTemplatesAndFunctions() {
@@ -29,11 +27,10 @@ class KotlinTest {
         """.trimIndent())
         val b = source("r/args/Args.kt", "package r.args\nclass Args { companion object { const val ID = \"id\" } }")
         val ev = Evaluator(Index(listOf(a, b)))
-        fun value(name: String) = ev.eval(a.file.collectDescendantsOfType<KtProperty>().first { it.name == name }.initializer)
+        fun value(name: String) = ev.eval(a.fields.first { it.name == name }.initializer)
 
         assertEquals("editor?id={id}&shared={shared}", value("EDITOR"))
-        assertEquals("editor?id=$WILD", ev.eval(a.file.collectDescendantsOfType<org.jetbrains.kotlin.psi.KtNamedFunction>()
-            .first { it.name == "editorRoute" }.bodyExpression))
+        assertEquals("editor?id=$WILD", ev.eval((a.fns.first { it.name == "editorRoute" }.psi as org.jetbrains.kotlin.psi.KtNamedFunction).bodyExpression))
         assertEquals(3L, value("VERSION"))
         assertEquals("editor/$WILD", value("X"))
         assertNull(value("Y"))
@@ -57,11 +54,11 @@ class KotlinTest {
     }
 
     @Test
-    fun fnmatchFollowsPythonRules() {
-        assertTrue(fnmatch(":feature:home", ":feature:*"))
-        assertTrue(fnmatch("benchmarks/src/a.kt", "benchmarks/**"))
-        assertFalse(fnmatch(":core:data", ":feature:*"))
-        assertTrue(fnmatch("a1", "a[0-9]"))
+    fun globMatching() {
+        assertTrue(glob(":feature:home", ":feature:*"))
+        assertTrue(glob("benchmarks/src/a.kt", "benchmarks/**"))
+        assertFalse(glob(":core:data", ":feature:*"))
+        assertTrue(glob("a1", "a[0-9]"))
     }
 
     @Test

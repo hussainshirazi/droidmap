@@ -27,7 +27,7 @@ class CasesTest {
     /** The graph and the findings for a project made of [files]. */
     private fun build(vararg files: Pair<String, String>): Pair<Graph, List<Finding>> {
         val root = write(*files)
-        val g = buildGraph(root).first
+        val g = buildGraph(root)
         return g to runChecks(g, Config.load(root))
     }
 
@@ -285,9 +285,9 @@ class CasesTest {
         git("commit", "-q", "-m", "base")
         val schema = root.resolve("app/schemas/com.x.db.AppDb/1.json")
         Files.writeString(schema, Files.readString(schema).replace("\"aaa\"", "\"bbb\""))
-        val g = buildGraph(root, base = "HEAD").first
+        val g = buildGraph(root, base = "HEAD")
         assertEquals(listOf("app/schemas/com.x.db.AppDb/1.json"), runChecks(g).filter { it.rule == "room-schema-changed" }.map { it.file })
-        assertEquals(0, runChecks(buildGraph(root).first).count { it.rule == "room-schema-changed" }) // only with a base
+        assertEquals(0, runChecks(buildGraph(root)).count { it.rule == "room-schema-changed" }) // only with a base
         assertEquals(2, run("check", root.toString(), "--base", "no-such-ref"))
     }
 
@@ -343,5 +343,154 @@ class CasesTest {
                 package com.x
                 val config = AppBarConfiguration(setOf(R.id.home, R.id.topLevel))""")
         assertEquals(listOf("nav.dest::@id/orphan"), f.filter { it.rule == "nav-unreachable" }.map { it.node })
+    }
+
+    private fun javaApp(itemFields: String) = arrayOf(*app,
+        "app/schemas/com.x.db.AppDatabase/2.json" to """
+            {"formatVersion": 1, "database": {"version": 2, "identityHash": "a", "entities": [{"tableName": "items", "fields": [
+              {"fieldPath": "id", "columnName": "id", "affinity": "INTEGER", "notNull": true},
+              {"fieldPath": "title", "columnName": "title", "affinity": "TEXT", "notNull": true},
+              {"fieldPath": "note", "columnName": "note", "affinity": "TEXT", "notNull": false}]}]}}""",
+        "app/schemas/com.x.db.AppDatabase/1.json" to """{"formatVersion": 1, "database": {"version": 1, "identityHash": "b", "entities": []}}""",
+        "app/src/main/java/com/x/db/Item.java" to """
+            package com.x.db;
+            import androidx.annotation.NonNull;
+            import androidx.room.*;
+
+            @Entity(tableName = "items")
+            public class Item {
+                @PrimaryKey public long id;
+                $itemFields
+                @Ignore public String cached;
+                public static final String TAG = "item";
+            }""",
+        "app/src/main/java/com/x/db/ItemDao.java" to """
+            package com.x.db;
+            import androidx.room.*;
+            import java.util.List;
+
+            @Dao
+            public interface ItemDao {
+                @Query("SELECT * FROM " + "items") List<Item> all();
+                @Insert(onConflict = OnConflictStrategy.REPLACE) void insert(Item... items);
+            }""",
+        "app/src/main/java/com/x/db/AppDatabase.java" to """
+            package com.x.db;
+            import androidx.room.*;
+            import androidx.room.migration.Migration;
+
+            @Database(entities = {Item.class}, version = AppDatabase.VERSION)
+            public abstract class AppDatabase extends RoomDatabase {
+                static final int VERSION = 2;
+                public abstract ItemDao itemDao();
+
+                static final Migration MIGRATION_1_2 = new Migration(1, 2) {
+                    @Override public void migrate(SupportSQLiteDatabase db) { }
+                };
+
+                static AppDatabase create(Context context) {
+                    return Room.databaseBuilder(context, AppDatabase.class, "app").addMigrations(MIGRATION_1_2).build();
+                }
+            }""",
+        "app/src/androidTest/java/com/x/db/MigrationTest.java" to """
+            package com.x.db;
+            import androidx.room.testing.MigrationTestHelper;
+
+            public class MigrationTest {
+                private static final String TEST_DB = "test";
+                @Rule public MigrationTestHelper helper = new MigrationTestHelper(InstrumentationRegistry.getInstrumentation(), AppDatabase.class);
+
+                @Test public void migrate1To2() throws IOException {
+                    helper.createDatabase(TEST_DB, 1).close();
+                    helper.runMigrationsAndValidate(TEST_DB, 2, true, AppDatabase.MIGRATION_1_2);
+                }
+            }""",
+        "app/src/main/java/com/x/data/Repositories.java" to """
+            package com.x.data;
+            import com.x.db.AppDatabase;
+            import com.x.db.ItemDao;
+            import dagger.Binds;
+            import dagger.Module;
+            import dagger.Provides;
+            import dagger.hilt.InstallIn;
+            import dagger.hilt.components.SingletonComponent;
+            import javax.inject.Inject;
+
+            public interface ItemRepository { }
+
+            class OfflineItemRepository implements ItemRepository {
+                @Inject OfflineItemRepository(ItemDao dao) { }
+            }
+
+            @Module
+            @InstallIn(SingletonComponent.class)
+            abstract class DataModule {
+                @Binds abstract ItemRepository bindItems(OfflineItemRepository impl);
+                @Provides static ItemDao itemDao(AppDatabase db) { return db.itemDao(); }
+                @Provides @Singleton static AppDatabase database(@ApplicationContext Context context) { return AppDatabase.create(context); }
+            }""",
+        "app/src/main/java/com/x/HomeViewModel.java" to """
+            package com.x;
+            import com.x.data.ItemRepository;
+            import dagger.hilt.android.lifecycle.HiltViewModel;
+            import javax.inject.Inject;
+
+            @HiltViewModel
+            public class HomeViewModel extends ViewModel {
+                @Inject public HomeViewModel(ItemRepository items) { }
+            }""",
+        "app/src/main/java/com/x/MainActivity.java" to """
+            package com.x;
+            import androidx.navigation.fragment.NavHostFragment;
+            import dagger.hilt.android.AndroidEntryPoint;
+            import javax.inject.Inject;
+
+            class Analytics { }
+
+            @AndroidEntryPoint
+            public class MainActivity extends AppCompatActivity {
+                @Inject Analytics analytics;
+
+                @Override protected void onCreate(Bundle state) {
+                    HomeViewModel vm = new ViewModelProvider(this).get(HomeViewModel.class);
+                }
+
+                void openDetail() {
+                    NavHostFragment.findNavController(fragment).navigate(R.id.to_detail);
+                }
+            }""",
+        "app/src/main/res/navigation/nav.xml" to """
+            <navigation $ns android:id="@+id/nav" app:startDestination="@id/home">
+              <fragment android:id="@+id/home" android:name="com.x.MainActivity">
+                <action android:id="@+id/to_detail" app:destination="@id/detail"/>
+              </fragment>
+              <fragment android:id="@+id/detail" android:name="com.x.DetailFragment"/>
+            </navigation>""",
+        "app/src/main/AndroidManifest.xml" to """
+            <manifest xmlns:android="http://schemas.android.com/apk/res/android" package="com.x">
+              <application><activity android:name=".MainActivity"/></application>
+            </manifest>""")
+
+    @Test
+    fun javaSourcesAreRead() {
+        val (g, f) = build(*javaApp("@NonNull public String title;\n    public String note;"))
+        assertTrue(g.edge("contains_entity", "AppDatabase", "Item") && g.edge("contains_dao", "AppDatabase", "ItemDao"))
+        assertEquals("items", g.nodes.getValue("class::com.x.db.Item").attrs.str("table"))
+        assertTrue(g.edge("queries", "ItemDao", "Item"))
+        assertEquals("insert", g.edges.single { it.kind == "writes" }.attrs.maps("replace").single().str("function"))
+        assertEquals(2, g.nodes.getValue("class::com.x.db.AppDatabase").attrs.int("version"))
+        assertTrue(g.edge("tests", "MigrationTest.migrate1To2", "MIGRATION_1_2 1->2"))
+        assertTrue(g.edge("injects", "HomeViewModel", "ItemRepository") && g.edge("bound_by", "ItemRepository", "DataModule.bindItems"))
+        assertTrue(g.edge("requires", "DataModule.bindItems", "OfflineItemRepository") && g.edge("injects", "OfflineItemRepository", "ItemDao"))
+        assertTrue(g.edge("uses_viewmodel", "MainActivity", "HomeViewModel"))
+        assertTrue(g.edge("navigates_to", "openDetail", "@id/detail"))
+        assertEquals("app/src/main/java/com/x/MainActivity.java", g.nodes.getValue("class::com.x.MainActivity").file)
+        // Only the binding nobody provides; the columns, the migration and its test all match.
+        assertEquals(listOf("hilt-missing-binding Analytics"), f.map { "${it.rule} ${it.node?.substringAfterLast('.')}" })
+
+        // A field added without a version bump; a String without @NonNull is a nullable column.
+        val (_, stale) = build(*javaApp("public String title;\n    public String note;\n    public int rating;"))
+        val message = stale.single { it.rule == "room-schema-stale" }.message
+        assertTrue("items.rating is new" in message && "items.title is now nullable" in message, message)
     }
 }

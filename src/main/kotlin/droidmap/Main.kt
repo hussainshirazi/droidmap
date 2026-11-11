@@ -84,7 +84,7 @@ class Cli(private val out: PrintStream = System.out, private val err: PrintStrea
     private fun load(root: Path, a: Args): Pair<Graph, Config> {
         val cfg = config(root, a)
         val base = base(root, a)
-        val saved = a.opt("--graph") ?: return buildGraph(root, cfg, base).first to cfg
+        val saved = a.opt("--graph") ?: return buildGraph(root, cfg, base) to cfg
         if (base != null) throw UsageError("--base compares source files, so it cannot be used with --graph")
         val g = try {
             Graph.load(Path.of(saved))
@@ -132,7 +132,7 @@ class Cli(private val out: PrintStream = System.out, private val err: PrintStrea
                 val t0 = System.nanoTime()
                 val r = root(a.positionals.firstOrNull())
                 val cfg = config(r, a)
-                val g = buildGraph(r, cfg, base(r, a)).first
+                val g = buildGraph(r, cfg, base(r, a))
                 val dir = a.opt("--out")?.let { Path.of(it) } ?: r.resolve(OUT_DIR)
                 g.save(dir.resolve("graph.json"))
                 if (a.flag("--node-link")) Files.writeString(dir.resolve("graph.node-link.json"), jsonText(g.toNodeLink()) + "\n")

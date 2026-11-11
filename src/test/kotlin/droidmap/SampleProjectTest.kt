@@ -19,8 +19,7 @@ import kotlin.test.assertTrue
 class SampleProjectTest {
     companion object {
         val root: Path = Path.of(SampleProjectTest::class.java.getResource("/sample/settings.gradle.kts")!!.toURI()).parent
-        val built: Pair<Graph, Project> by lazy { buildGraph(root) }
-        val g: Graph get() = built.first
+        val g: Graph by lazy { buildGraph(root) }
     }
 
     private fun edge(kind: String, src: String, dst: String) =
@@ -133,7 +132,7 @@ class SampleProjectTest {
 
     @Test
     fun graphIsDeterministicAndHasNoAbsolutePaths() {
-        val again = buildGraph(root).first
+        val again = buildGraph(root)
         val a = jsonText(g.toMap())
         assertEquals(a, jsonText(again.toMap()))
         assertFalse(root.toString() in a || root.toString().replace('\\', '/') in a)

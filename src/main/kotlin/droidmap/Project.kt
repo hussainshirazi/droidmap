@@ -1,16 +1,5 @@
 package droidmap
 
-import org.jetbrains.kotlin.cli.common.environment.setIdeaIoUseFallback
-import org.jetbrains.kotlin.cli.extensionsStorage
-import org.jetbrains.kotlin.cli.jvm.compiler.EnvironmentConfigFiles
-import org.jetbrains.kotlin.cli.jvm.compiler.KotlinCoreEnvironment
-import org.jetbrains.kotlin.com.intellij.openapi.util.Disposer
-import org.jetbrains.kotlin.com.intellij.psi.PsiElement
-import org.jetbrains.kotlin.compiler.plugin.CompilerPluginRegistrar
-import org.jetbrains.kotlin.compiler.plugin.ExperimentalCompilerApi
-import org.jetbrains.kotlin.config.CompilerConfiguration
-import org.jetbrains.kotlin.psi.KtFile
-import org.jetbrains.kotlin.psi.KtPsiFactory
 import org.tomlj.Toml
 import org.tomlj.TomlArray
 import org.tomlj.TomlTable
@@ -21,6 +10,7 @@ import java.nio.file.Path
 import java.nio.file.SimpleFileVisitor
 import java.nio.file.attribute.BasicFileAttributes
 import java.security.MessageDigest
+import java.util.concurrent.ConcurrentHashMap
 
 /** Directories never scanned (any directory whose name starts with "." is skipped too). */
 val SKIP_DIRS = setOf("build", "node_modules", "out", "droidmap-out", "graphify-out", "__pycache__", "venv")
@@ -59,16 +49,11 @@ class Config(
                 require(v.toString() in SEVERITIES) { "$p: rule \"$k\" is set to \"$v\"; use ${SEVERITIES.joinToString(", ")}" }
                 severities[k] = v.toString()
             }
-            val forbidRaw: Any? = r.get(listOf("gradle", "forbid"))
             val forbid = ArrayList<Map<String, Any?>>()
-            (forbidRaw as? TomlArray)?.let { arr ->
+            (r.get(listOf("gradle", "forbid")) as? TomlArray)?.let { arr ->
                 for (i in 0 until arr.size()) {
                     val t = arr.get(i) as? TomlTable ?: continue
-                    val m = LinkedHashMap<String, Any?>()
-                    for (k in t.keySet()) {
-                        val v: Any? = t.get(listOf(k))
-                        m[k] = v
-                    }
+                    val m = t.keySet().associateWith { k -> t.get(listOf(k)) }
                     require(m["from"] is String && m["to"] is String) { "$p: every [[gradle.forbid]] needs from and to" }
                     forbid.add(m)
                 }
@@ -79,13 +64,14 @@ class Config(
     }
 }
 
-/** Python-style fnmatch (case-sensitive): * matches anything including '/', ? one char, [..] a set. */
-fun fnmatch(name: String, pattern: String): Boolean {
+private val globs = ConcurrentHashMap<String, Regex>()
+
+/** Glob matching (case-sensitive): `*` matches anything, `/` and `:` included; `?` one character; `[..]` a set. */
+fun glob(name: String, pattern: String): Boolean = globs.getOrPut(pattern) {
     val sb = StringBuilder()
     var i = 0
     while (i < pattern.length) {
-        val c = pattern[i]
-        when (c) {
+        when (val c = pattern[i]) {
             '*' -> sb.append(".*")
             '?' -> sb.append('.')
             '[' -> {
@@ -101,8 +87,8 @@ fun fnmatch(name: String, pattern: String): Boolean {
         }
         i++
     }
-    return Regex(sb.toString()).matches(name)
-}
+    Regex(sb.toString())
+}.matches(name)
 
 fun sourceSetOf(rel: String): String? {
     val parts = rel.split('/')
@@ -112,58 +98,12 @@ fun sourceSetOf(rel: String): String? {
 
 fun isTestSet(sourceSet: String?): Boolean = sourceSet != null && "test" in sourceSet.lowercase()
 
-/** The Kotlin compiler's parser, set up once per process. */
-object KotlinPsi {
-    @Suppress("OPT_IN_USAGE_ERROR")
-    @OptIn(CompilerConfiguration.Internals::class, ExperimentalCompilerApi::class)
-    private val factory: KtPsiFactory by lazy {
-        setIdeaIoUseFallback()
-        val config = CompilerConfiguration()
-        config.extensionsStorage = CompilerPluginRegistrar.ExtensionStorage()
-        val env = KotlinCoreEnvironment.createForProduction(Disposer.newDisposable("droidmap"), config, EnvironmentConfigFiles.JVM_CONFIG_FILES)
-        KtPsiFactory(env.project, markGenerated = false)
-    }
-
-    @Synchronized
-    fun parse(name: String, text: String): KtFile = factory.createFile(name, text.replace("\r\n", "\n"))
-}
-
-/** One parsed Kotlin file and what name resolution needs from it. */
-class Source(val path: String, val module: String?, val sourceSet: String?, val file: KtFile) {
-    val pkg: String = file.packageFqName.asString()
-    val imports: Map<String, String>
-    val starImports: List<String>
-    private val lineStarts: IntArray
-
-    init {
-        val imp = LinkedHashMap<String, String>()
-        val star = ArrayList<String>()
-        for (d in file.importDirectives) {
-            val fq = d.importedFqName?.asString() ?: continue
-            if (d.isAllUnder) star.add(fq) else imp[d.aliasName ?: fq.substringAfterLast('.')] = fq
-        }
-        imports = imp
-        starImports = star
-        val text = file.text
-        val starts = ArrayList<Int>()
-        starts.add(0)
-        text.forEachIndexed { i, c -> if (c == '\n') starts.add(i + 1) }
-        lineStarts = starts.toIntArray()
-    }
-
-    fun lineAt(offset: Int): Int {
-        val k = lineStarts.binarySearch(offset)
-        return if (k >= 0) k + 1 else -k - 1
-    }
-
-    fun line(el: PsiElement): Int = lineAt(el.textOffset)
-    val isTest get() = isTestSet(sourceSet)
-}
-
+/** The files of a project that droidmap reads, by kind, and its Gradle modules once settings have been read. */
 class Project(root: Path, config: Config? = null) {
     val root: Path = root.toAbsolutePath().normalize()
     val config: Config = config ?: Config.load(this.root)
     val ktPaths = ArrayList<String>()
+    val javaPaths = ArrayList<String>()
     val gradlePaths = ArrayList<String>()
     val manifestPaths = ArrayList<String>()
     val navXmlPaths = ArrayList<String>()
@@ -174,9 +114,8 @@ class Project(root: Path, config: Config? = null) {
     var modules: Map<String, String> = emptyMap() // gradle path -> dir ("" for the root)
         private set
     private var moduleDirs: List<Pair<String, String>> = emptyList()
-    val sources = ArrayList<Source>()
-    lateinit var index: Index
-    lateinit var eval: Evaluator
+    private val stamps = HashMap<String, String>()
+    /** Changes when a file droidmap reads is added, removed or changed. */
     val fingerprint: String
 
     init {
@@ -202,12 +141,12 @@ class Project(root: Path, config: Config? = null) {
         })
         found.sortBy { it.first }
         for ((rel, size, mtime) in found) {
-            if (this.config.ignorePaths.any { fnmatch(rel, it) }) continue
-            val name = rel.substringAfterLast('/')
-            val low = name.lowercase()
+            if (this.config.ignorePaths.any { glob(rel, it) }) continue
+            val low = rel.substringAfterLast('/').lowercase()
             val dir = rel.substringBeforeLast('/', "")
             val bucket = when {
                 low.endsWith(".kt") -> ktPaths
+                low.endsWith(".java") -> javaPaths
                 low.endsWith(".gradle.kts") || low.endsWith(".gradle") -> gradlePaths
                 low == "androidmanifest.xml" -> manifestPaths
                 low.endsWith(".xml") && "/res/navigation" in "/$dir" -> navXmlPaths
@@ -216,6 +155,7 @@ class Project(root: Path, config: Config? = null) {
                 low.endsWith(".json") && low.dropLast(5).isNotEmpty() && low.dropLast(5).all { it.isDigit() } -> jsonPaths
                 else -> null
             } ?: continue
+            stamps[rel] = "$size:$mtime"
             digest.update("$rel\u0000$size\u0000$mtime\n".toByteArray())
             if (size > MAX_FILE_BYTES) { skipped.add(rel); continue }
             bucket.add(rel)
@@ -225,6 +165,9 @@ class Project(root: Path, config: Config? = null) {
 
     fun read(rel: String): String = String(Files.readAllBytes(root.resolve(rel)), Charsets.UTF_8)
 
+    /** The size and modification time [rel] had when the project was scanned. */
+    fun stamp(rel: String): String? = stamps[rel]
+
     fun setModules(m: Map<String, String>) {
         modules = m
         moduleDirs = m.entries.map { it.value to it.key }.sortedByDescending { it.first.length }
@@ -233,18 +176,5 @@ class Project(root: Path, config: Config? = null) {
     fun moduleOf(rel: String): String? {
         for ((d, p) in moduleDirs) if (d == "" || rel == d || rel.startsWith("$d/")) return p
         return null
-    }
-
-    fun parseKotlin() {
-        sources.clear()
-        for (rel in ktPaths) {
-            try {
-                sources.add(Source(rel, moduleOf(rel), sourceSetOf(rel), KotlinPsi.parse(rel.substringAfterLast('/'), read(rel))))
-            } catch (e: Exception) {
-                skipped.add(rel)
-            }
-        }
-        index = Index(sources)
-        eval = Evaluator(index)
     }
 }
