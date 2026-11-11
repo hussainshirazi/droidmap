@@ -109,6 +109,7 @@ class Call(
     val src: Source, val psi: PsiElement, val fn: Fn?, val assignedTo: Field?, val isNew: Boolean = false,
 ) {
     val line: Int get() = src.line(psi)
+    val endLine: Int get() = src.lineAt(psi.textRange.endOffset)
 
     /** The receiver's last part: `navController` for navController.navigate(...). */
     val receiverName: String? get() = receiver?.substringAfterLast('.')

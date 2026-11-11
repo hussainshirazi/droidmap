@@ -204,6 +204,10 @@ class Project(root: Path, config: Config? = null) {
     /** When [rel] was last modified, as of the scan. */
     fun mtime(rel: String): Long? = stamps[rel]?.substringAfter(':')?.toLongOrNull()
 
+    /** Every file droidmap reads. */
+    fun readPaths(): Set<String> =
+        (ktPaths + javaPaths + gradlePaths + manifestPaths + navXmlPaths + menuXmlPaths + tomlPaths + jsonPaths).toHashSet()
+
     /** The size and modification time [rel] had when the project was scanned. */
     fun stamp(rel: String): String? = stamps[rel]
 

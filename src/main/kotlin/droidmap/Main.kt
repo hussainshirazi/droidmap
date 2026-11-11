@@ -20,7 +20,9 @@ private val USAGE = """
       impact <node> [path] [--depth N] [--json]   what depends on a node
       show   <node> [path] [--json]                a node, its dependencies and users
       find   <text> [path] [--limit N] [--json]
-      report [path] [-o FILE]                      the Markdown report
+      diff   [path] [--base REF] [--depth N] [--format text|markdown|json]
+                                                   what a change touches (default: uncommitted changes)
+      report [path] [-o FILE]                      the Markdown report, with module and screen diagrams
       rules                                        list the rules and their default severities
       mcp    [path]                                run as an MCP server over stdio
 
@@ -193,6 +195,22 @@ class Cli(private val out: PrintStream = System.out, private val err: PrintStrea
                     else -> out.println(formatFind(hits))
                 }
                 if (hits.isEmpty()) 1 else 0
+            }
+            "diff" -> {
+                val a = parseArgs(rest, setOf("--config", "--base", "--depth", "--format"), emptySet())
+                val format = a.opt("--format") ?: "text"
+                if (format !in setOf("text", "markdown", "json")) throw UsageError("--format is text, markdown or json")
+                val r = root(a.positionals.firstOrNull())
+                val cfg = config(r, a)
+                val base = base(r, a) ?: "HEAD".also { if (!Git.isCommit(r, it)) throw UsageError("$r is not in a git repository with a commit") }
+                val built = buildGraph(Project(r, cfg))
+                val report = diffReport(built.graph, readChanges(r, base), runChecks(built.graph, cfg), built.project.readPaths(),
+                    a.opt("--depth")?.toIntOrNull() ?: 4)
+                out.println(when (format) {
+                    "json" -> jsonText(report.toMap())
+                    else -> formatDiff(report, markdown = format == "markdown")
+                })
+                0
             }
             "report" -> {
                 val a = parseArgs(rest, common + setOf("--out"), emptySet(), mapOf("-o" to "--out"))

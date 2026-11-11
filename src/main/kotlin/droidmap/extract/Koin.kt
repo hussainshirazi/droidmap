@@ -92,7 +92,7 @@ class KoinScan(private val code: Code, private val g: Graph) {
         }
         val first = provides.first()
         val did = g.addNode("koin.def::${s.path}:${d.line}", "koin_definition", "${module?.assignedTo?.name ?: "module"}.$style ${first.label}",
-            s.path, d.line, s.module, mapOf("style" to style, "provides" to provides.map { it.fq }, "koin_module" to module?.let { moduleKey(it) },
+            s.path, d.line, s.module, mapOf("end_line" to d.endLine, "style" to style, "provides" to provides.map { it.fq }, "koin_module" to module?.let { moduleKey(it) },
                 "source_set" to s.sourceSet))
         module?.let { g.addEdge(did, moduleNode(it), "declared_in", s.path, d.line) }
         for (t in provides) g.addEdge(classNode(t), did, "bound_by", s.path, d.line)

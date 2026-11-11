@@ -145,7 +145,7 @@ class NavScan(private val p: Project, private val code: Code, private val g: Gra
             val fq = d?.fq ?: typeArg.name
             nid = destId(fq)
             g.addNode(nid, "nav_destination", fq.substringAfterLast('.'), d?.src?.path ?: s.path, d?.line ?: call.line,
-                d?.src?.module ?: s.module, mapOf("route" to fq, "style" to "type", "resolved" to flag(d != null)) + common)
+                d?.src?.module ?: s.module, mapOf("route" to fq, "style" to "type", "resolved" to flag(d != null), "end_line" to (d?.endLine ?: call.endLine)) + common)
             typeDests[fq] = nid
             if (d != null) nodeForClass(g, d, "nav_route")
         } else {
@@ -167,7 +167,7 @@ class NavScan(private val p: Project, private val code: Code, private val g: Gra
                 else -> null
             }
             g.addNode(nid, "nav_destination", display(v), s.path, call.line, s.module,
-                mapOf("route" to display(v), "style" to "string", "route_constant" to constant) + common)
+                mapOf("route" to display(v), "style" to "string", "route_constant" to constant, "end_line" to call.endLine) + common)
             stringDests[v] = nid
         }
         fnNode(call.fn)?.let { g.addEdge(it, nid, "registers", s.path, call.line) }

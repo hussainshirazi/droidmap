@@ -274,21 +274,81 @@ class CasesTest {
         val root = write(*roomProject("""
             @Entity(tableName = "items")
             data class Item(@PrimaryKey val id: Long)"""))
-        fun git(vararg args: String) {
-            val proc = ProcessBuilder(listOf("git", "-C", root.toString(), "-c", "user.name=t", "-c", "user.email=t@example.com",
-                "-c", "commit.gpgsign=false") + args).redirectErrorStream(true).start()
-            val out = proc.inputStream.readBytes().toString(Charsets.UTF_8)
-            assertEquals(0, proc.waitFor(), out)
-        }
-        git("init", "-q")
-        git("add", ".")
-        git("commit", "-q", "-m", "base")
+        commitAll(root)
         val schema = root.resolve("app/schemas/com.x.db.AppDb/1.json")
         Files.writeString(schema, Files.readString(schema).replace("\"aaa\"", "\"bbb\""))
         val g = buildGraph(root, base = "HEAD")
         assertEquals(listOf("app/schemas/com.x.db.AppDb/1.json"), runChecks(g).filter { it.rule == "room-schema-changed" }.map { it.file })
         assertEquals(0, runChecks(buildGraph(root)).count { it.rule == "room-schema-changed" }) // only with a base
         assertEquals(2, run("check", root.toString(), "--base", "no-such-ref"))
+    }
+
+    private fun git(root: Path, vararg args: String) {
+        val proc = ProcessBuilder(listOf("git", "-C", root.toString(), "-c", "user.name=t", "-c", "user.email=t@example.com",
+            "-c", "commit.gpgsign=false") + args).redirectErrorStream(true).start()
+        val out = proc.inputStream.readBytes().toString(Charsets.UTF_8)
+        assertEquals(0, proc.waitFor(), out)
+    }
+
+    /** A git repository at [root] with everything in it committed. */
+    private fun commitAll(root: Path) {
+        git(root, "init", "-q")
+        git(root, "add", ".")
+        git(root, "commit", "-q", "-m", "base")
+    }
+
+    @Test
+    fun parsesAGitDiff() {
+        val (files, deleted) = parseDiff("""
+            diff --git a/A.kt b/A.kt
+            --- a/A.kt
+            +++ b/A.kt
+            @@ -3,0 +4,2 @@ fun a() {
+            @@ -10 +12 @@
+            @@ -20,3 +21,0 @@
+            diff --git a/New.kt b/New.kt
+            --- /dev/null
+            +++ b/New.kt
+            @@ -0,0 +1,5 @@
+            diff --git a/Gone.kt b/Gone.kt
+            --- a/Gone.kt
+            +++ /dev/null
+            @@ -1,4 +0,0 @@""".trimIndent())
+        assertEquals(listOf(4..5, 12..12, 21..21), files.single { it.path == "A.kt" }.ranges)
+        assertTrue(files.single { it.path == "New.kt" }.whole)
+        assertEquals(listOf("Gone.kt"), deleted)
+    }
+
+    @Test
+    fun diffShowsWhatAChangeTouches() {
+        val home = "app/src/main/kotlin/com/x/Home.kt"
+        val root = write(*app, home to """
+            package com.x
+            import androidx.navigation.compose.composable
+            import dagger.hilt.android.lifecycle.HiltViewModel
+            import javax.inject.Inject
+
+            class Repo @Inject constructor()
+            @HiltViewModel class HomeViewModel @Inject constructor(repo: Repo) : ViewModel()
+            @Composable fun HomeScreen(vm: HomeViewModel) { }
+            fun AppNav() { NavHost(nav, "home") { composable("home") { HomeScreen(vm) } } }
+            fun unrelated() { }""")
+        commitAll(root)
+        val file = root.resolve(home)
+        Files.writeString(file, Files.readString(file).replace("class Repo @Inject constructor()", "class Repo @Inject constructor() {\n    fun load() = 1\n}"))
+        val buf = ByteArrayOutputStream()
+        assertEquals(0, runMain(listOf("diff", root.toString(), "--format", "json"), PrintStream(buf), PrintStream(ByteArrayOutputStream())))
+        @Suppress("UNCHECKED_CAST")
+        val r = fromJson(compactJson.parseToJsonElement(buf.toString(Charsets.UTF_8))) as Map<String, Any?>
+        assertEquals(listOf("class::com.x.Repo"), r.maps("changed").map { it.str("id") })
+        val affected = r.maps("affected").map { it.str("label") }
+        assertTrue(listOf("HomeViewModel", "HomeScreen", "home").all { it in affected } && "unrelated" !in affected, affected.toString())
+        // Unchanged code: nothing.
+        git(root, "add", ".")
+        git(root, "commit", "-q", "-m", "change")
+        val text = ByteArrayOutputStream()
+        runMain(listOf("diff", root.toString()), PrintStream(text), PrintStream(ByteArrayOutputStream()))
+        assertTrue("No Android structure changed" in text.toString(Charsets.UTF_8), text.toString(Charsets.UTF_8))
     }
 
     @Test

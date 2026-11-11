@@ -20,6 +20,19 @@ object Git {
         return proc.exitValue() to out
     }
 
+    private fun text(root: Path, vararg args: String): String? = run(root, *args).let { (code, out) -> if (code == 0) String(out, Charsets.UTF_8) else null }
+
+    /** Where the current branch left [ref] (their merge base), or [ref] itself when the history is too shallow to tell. */
+    fun mergeBase(root: Path, ref: String): String = text(root, "merge-base", ref, "HEAD")?.trim()?.ifEmpty { null } ?: ref
+
+    /** The changes in the working tree since [base], as a diff without context lines, with paths relative to [root]. */
+    fun diff(root: Path, base: String): String? =
+        text(root, "-c", "core.quotepath=off", "diff", "-U0", "--no-color", "--no-ext-diff", "-M", "--relative", base, "--")
+
+    /** Files git does not track yet (and does not ignore), relative to [root]. */
+    fun untracked(root: Path): List<String> =
+        text(root, "ls-files", "--others", "--exclude-standard", "-z")?.split('\u0000')?.filter { it.isNotEmpty() } ?: emptyList()
+
     /** Whether [ref] names a commit in the repository that holds [root]. */
     fun isCommit(root: Path, ref: String): Boolean =
         !ref.startsWith("-") && run(root, "rev-parse", "--verify", "--quiet", "$ref^{commit}").first == 0

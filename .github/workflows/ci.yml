@@ -56,7 +56,11 @@ jobs:
           jar: build/libs/droidmap.jar
           fail-on: never
           upload-sarif: "false"
+          comment: "false"
       - name: SARIF paths point into the repository
         shell: bash
         run: |
           grep -q '"uri": "src/test/resources/sample/' "${{ steps.droidmap.outputs.sarif }}"
+      - name: diff works in a shallow checkout
+        shell: bash
+        run: java -jar build/libs/droidmap.jar diff src/test/resources/sample --base HEAD

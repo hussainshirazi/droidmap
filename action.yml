@@ -1,5 +1,5 @@
 name: droidmap check
-description: Android-aware checks (Room migrations, navigation targets, Hilt bindings, Gradle module rules) shown on pull requests.
+description: Android-aware checks (Room migrations and schemas, navigation, Hilt and Koin, Gradle modules, permissions) and what each pull request touches.
 author: hussainshirazi
 branding:
   icon: map
@@ -14,6 +14,9 @@ inputs:
     default: error
   upload-sarif:
     description: Upload the findings to GitHub code scanning, so they show on pull requests (the job needs `security-events write`).
+    default: "true"
+  comment:
+    description: On a pull request, post (and keep updated) a comment saying what the change touches (the job needs `pull-requests write`).
     default: "true"
   args:
     description: Extra arguments for droidmap check, such as `--config tools/droidmap.toml`.
@@ -108,6 +111,34 @@ runs:
         { echo "### droidmap"; echo; echo '```'; cat "$RUNNER_TEMP/droidmap.txt"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
         echo "code=$code" >> "$GITHUB_OUTPUT"
         if [ -f "$sarif" ]; then echo "sarif=$sarif" >> "$GITHUB_OUTPUT"; fi
+
+    - name: Say what the pull request touches
+      if: steps.base.outputs.base != '' && github.event.pull_request.number
+      shell: bash
+      env:
+        JAVA: ${{ steps.setup.outputs.java }}
+        JAR: ${{ steps.setup.outputs.jar }}
+        INPUT_PATH: ${{ inputs.path }}
+        BASE: ${{ steps.base.outputs.base }}
+        COMMENT: ${{ inputs.comment == 'true' && !github.event.pull_request.head.repo.fork }}
+        PR: ${{ github.event.pull_request.number }}
+        REPO: ${{ github.repository }}
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        report="$RUNNER_TEMP/droidmap-diff.md"
+        if ! "$JAVA" -jar "$JAR" diff "$INPUT_PATH" --base "$BASE" --format markdown > "$report"; then
+          echo "::warning::droidmap diff failed, so there is no impact summary"; exit 0
+        fi
+        cat "$report" >> "$GITHUB_STEP_SUMMARY"
+        if [ "$COMMENT" != "true" ]; then exit 0; fi
+        # One comment per pull request, updated on every push.
+        id=$(gh api "repos/$REPO/issues/$PR/comments" --paginate --jq '.[] | select(.body | startswith("<!-- droidmap -->")) | .id' 2>/dev/null | head -1)
+        if [ -z "$id" ] && grep -q "No Android structure changed" "$report" && ! grep -q "Findings in the changed files" "$report"; then exit 0; fi
+        if [ -n "$id" ]; then
+          gh api -X PATCH "repos/$REPO/issues/comments/$id" -F "body=@$report" > /dev/null || echo "::warning::droidmap could not update its comment (does the job have pull-requests: write?)"
+        else
+          gh api "repos/$REPO/issues/$PR/comments" -F "body=@$report" > /dev/null || echo "::warning::droidmap could not comment (does the job have pull-requests: write?)"
+        fi
 
     - name: Upload to code scanning
       # Pull requests from forks get a read-only token, which cannot upload: the job summary still has the findings.

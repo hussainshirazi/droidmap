@@ -126,7 +126,7 @@ class HiltScan(private val code: Code, private val g: Graph) {
         val target = typeDecl(f.returns, s, f.psi)
         val pid = funId(fq)
         g.addNode(pid, "hilt_provider", if (module != null) "${module.name}.${f.name}" else f.name, s.path, f.line, s.module,
-            mapOf("source_set" to s.sourceSet, "style" to style, "returns" to (target?.fq ?: returns?.copy(nullable = false)?.toString()),
+            mapOf("source_set" to s.sourceSet, "end_line" to f.endLine, "style" to style, "returns" to (target?.fq ?: returns?.copy(nullable = false)?.toString()),
                 "qualifier" to q, "scope" to scopeOf(f.anns), "multibinding" to multi,
                 "hilt_module" to module?.fq, "test_install_in" to flag(module?.anns?.has("TestInstallIn") == true)))
         if (module != null) g.addEdge(pid, classId(module.fq), "declared_in", s.path, f.line)

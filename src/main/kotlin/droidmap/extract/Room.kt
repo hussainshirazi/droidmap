@@ -212,7 +212,8 @@ class RoomScan(private val p: Project, private val code: Code, private val g: Gr
             val db = dbFor(s)
             val mid = migrationId(db, from, to, name)
             g.addNode(mid, "room_migration", "$name $from->$to", s.path, line, s.module,
-                mapOf("db" to db, "from_version" to from, "to_version" to to, "style" to "manual", "name" to name, "owner" to owner))
+                mapOf("db" to db, "from_version" to from, "to_version" to to, "style" to "manual", "name" to name, "owner" to owner,
+                    "end_line" to (f.named?.endLine ?: s.lineAt(f.at.textRange.endOffset))))
             if (f.named != null) manual.add(Manual(mid, name, s.isTest)) // one passed inline is used where it is written
             if (db != null) g.addEdge(mid, classId(db), "migrates", s.path, line)
         }
@@ -343,7 +344,8 @@ class RoomScan(private val p: Project, private val code: Code, private val g: Gr
                 val tid = "test::$fq"
                 val cls = fn.owner?.name
                 g.addNode(tid, "test", if (cls != null) "$cls.${fn.name}" else fn.name, s.path, fn.line, s.module,
-                    mapOf("source_set" to s.sourceSet, "db" to db, "created" to created.toList(), "validated" to validated.toList(), "generic" to flag(generic)))
+                    mapOf("source_set" to s.sourceSet, "end_line" to fn.endLine, "db" to db, "created" to created.toList(), "validated" to validated.toList(),
+                        "generic" to flag(generic)))
                 for (m in migByDb[db] ?: emptyList()) {
                     val from = (m.attrs["from_version"] as Number).toInt()
                     val to = (m.attrs["to_version"] as Number).toInt()

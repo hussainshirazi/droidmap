@@ -30,6 +30,13 @@ val TOOLS: List<Map<String, Any?>> = listOf(
             "module, and which tests cover it. Use before changing a class, entity, route or module.",
         "inputSchema" to mapOf("type" to "object", "required" to listOf("node"), "properties" to mapOf(
             "node" to NODE_ARG, "depth" to mapOf("type" to "integer", "minimum" to 1, "maximum" to 10, "default" to 4)))),
+    mapOf("name" to "droidmap_diff",
+        "description" to "What a change touches: the graph nodes whose code changed since a git ref (by default the uncommitted " +
+            "changes) and everything that depends on them (screens, destinations, ViewModels, Room, bindings, modules, tests), " +
+            "with the findings in the changed files. Use after editing, to see what to test.",
+        "inputSchema" to mapOf("type" to "object", "properties" to mapOf(
+            "base" to mapOf("type" to "string", "description" to "Git ref to compare with (default HEAD: the uncommitted changes)."),
+            "depth" to mapOf("type" to "integer", "minimum" to 1, "maximum" to 10, "default" to 4)))),
     mapOf("name" to "droidmap_show",
         "description" to "One node with its attributes, its direct dependencies and its direct users.",
         "inputSchema" to mapOf("type" to "object", "required" to listOf("node"), "properties" to mapOf("node" to NODE_ARG))),
@@ -61,7 +68,7 @@ class McpServer(private val root: Path, private val configPath: Path? = null, pr
     }
 
     /** The graph, rebuilt when a file or the config changed; files that did not change are not parsed again. */
-    private fun current(): Pair<Graph, Config> {
+    private fun current(): Pair<Built, Config> {
         val cfg = Config.load(root, configPath)
         val p = Project(root, cfg)
         val s = p.fingerprint + configStamp()
@@ -71,7 +78,7 @@ class McpServer(private val root: Path, private val configPath: Path? = null, pr
             stamp = s
             log.println("droidmap: graph built (${it.graph.nodes.size} nodes, ${it.graph.edges.size} edges)")
         }
-        return b.graph to config
+        return b to config
     }
 
     @Suppress("UNCHECKED_CAST")
@@ -117,12 +124,20 @@ class McpServer(private val root: Path, private val configPath: Path? = null, pr
     }
 
     private fun callText(name: String, args: Map<String, Any?>): String {
-        val (g, cfg) = try {
+        val (built, cfg) = try {
             current()
         } catch (e: IllegalArgumentException) {
             throw ToolError("cannot read the config: ${e.message}")
         }
+        val g = built.graph
         when (name) {
+            "droidmap_diff" -> {
+                val base = (args["base"] as? String)?.trim()?.ifEmpty { null } ?: "HEAD"
+                if (!Git.isCommit(root, base)) throw ToolError("$base is not a commit in the git repository of $root")
+                val changes = try { readChanges(root, base) } catch (e: UsageError) { throw ToolError(e.message ?: "git diff failed") }
+                return formatDiff(diffReport(g, changes, runChecks(g, cfg), built.project.readPaths(),
+                    ((args["depth"] as? Number)?.toInt() ?: 4).coerceIn(1, 10)), markdown = false)
+            }
             "droidmap_check" -> {
                 val floor = SEVERITY_ORDER[args["min_severity"] as? String ?: "info"] ?: 2
                 return formatFindings(runChecks(g, cfg).filter { (SEVERITY_ORDER[it.severity] ?: 9) <= floor })
