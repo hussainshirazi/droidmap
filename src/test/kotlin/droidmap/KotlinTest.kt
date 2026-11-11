@@ -54,6 +54,29 @@ class KotlinTest {
     }
 
     @Test
+    fun versionCatalogPlugins() {
+        val plugins = droidmap.extract.catalogPlugins("""
+            [versions]
+            agp = "9.0"
+            [plugins]
+            android-application = { id = "com.android.application", version.ref = "agp" }
+            kotlin_jvm = "org.jetbrains.kotlin.jvm:2.4.21" # a comment
+            "quoted-key" = { id = 'x.quoted' }
+            multi = {
+                id = "x.multi",
+                version.ref = "agp"
+            }
+            [plugins.table-style]
+            id = "x.table"
+            version = "1"
+            [libraries]
+            core = { module = "a:b", version = "1" }
+        """.trimIndent())
+        assertEquals(mapOf("android.application" to "com.android.application", "kotlin.jvm" to "org.jetbrains.kotlin.jvm",
+            "quoted.key" to "x.quoted", "multi" to "x.multi", "table.style" to "x.table"), plugins)
+    }
+
+    @Test
     fun globMatching() {
         assertTrue(glob(":feature:home", ":feature:*"))
         assertTrue(glob("benchmarks/src/a.kt", "benchmarks/**"))

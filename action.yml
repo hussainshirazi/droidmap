@@ -105,7 +105,7 @@ runs:
         extra=()
         if [ -n "$BASE" ]; then extra=(--base "$BASE"); fi
         # shellcheck disable=SC2086 # args is split into words on purpose
-        "$JAVA" -jar "$JAR" check "$INPUT_PATH" --fail-on "$INPUT_FAIL_ON" --sarif "$sarif" "${extra[@]}" $INPUT_ARGS > "$RUNNER_TEMP/droidmap.txt"
+        "$JAVA" -XX:TieredStopAtLevel=1 -XX:+UseSerialGC -jar "$JAR" check "$INPUT_PATH" --fail-on "$INPUT_FAIL_ON" --sarif "$sarif" "${extra[@]}" $INPUT_ARGS > "$RUNNER_TEMP/droidmap.txt"
         code=$?
         cat "$RUNNER_TEMP/droidmap.txt"
         { echo "### droidmap"; echo; echo '```'; cat "$RUNNER_TEMP/droidmap.txt"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
@@ -126,7 +126,7 @@ runs:
         GH_TOKEN: ${{ github.token }}
       run: |
         report="$RUNNER_TEMP/droidmap-diff.md"
-        if ! "$JAVA" -jar "$JAR" diff "$INPUT_PATH" --base "$BASE" --format markdown > "$report"; then
+        if ! "$JAVA" -XX:TieredStopAtLevel=1 -XX:+UseSerialGC -jar "$JAR" diff "$INPUT_PATH" --base "$BASE" --format markdown > "$report"; then
           echo "::warning::droidmap diff failed, so there is no impact summary"; exit 0
         fi
         cat "$report" >> "$GITHUB_STEP_SUMMARY"

@@ -31,7 +31,8 @@ mv "$home/droidmap.jar.part" "$home/droidmap.jar"
 cat > "$bin/droidmap" <<EOF
 #!/bin/sh
 # droidmap: runs the jar with \$JAVA_HOME's java, or the one on the PATH (Java 17 or newer).
-exec "\${JAVA_HOME:+\$JAVA_HOME/bin/}java" -jar "$home/droidmap.jar" "\$@"
+# A short run starts faster with only the quick JIT compiler and the serial GC.
+exec "\${JAVA_HOME:+\$JAVA_HOME/bin/}java" -XX:TieredStopAtLevel=1 -XX:+UseSerialGC -jar "$home/droidmap.jar" "\$@"
 EOF
 chmod +x "$bin/droidmap"
 

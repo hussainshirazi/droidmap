@@ -13,7 +13,8 @@ class Droidmap < Formula
 
   def install
     libexec.install "droidmap.jar"
-    bin.write_jar_script libexec/"droidmap.jar", "droidmap"
+    # A short run starts faster with only the quick JIT compiler and the serial GC.
+    bin.write_jar_script libexec/"droidmap.jar", "droidmap", "-XX:TieredStopAtLevel=1 -XX:+UseSerialGC"
   end
 
   test do

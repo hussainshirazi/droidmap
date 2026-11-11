@@ -2,8 +2,6 @@ package droidmap.extract
 
 import droidmap.Graph
 import droidmap.Project
-import org.tomlj.Toml
-import org.tomlj.TomlTable
 
 fun moduleId(path: String) = "module::$path"
 
@@ -30,6 +28,48 @@ private fun chain(toks: List<Tok>, start: Int): Pair<List<String>, Int> {
         }
     }
     return parts to k
+}
+
+private val PLUGIN_ID = Regex("""\bid\s*=\s*["']([^"']+)["']""")
+
+private fun unquote(s: String) = s.trim().removeSurrounding("\"").removeSurrounding("'")
+
+/**
+ * The [plugins] of a version catalog, as accessor (a.b.c, the way libs.plugins.a.b.c names it) to plugin id.
+ * Read line by line: droidmap needs nothing else from the catalog, and a TOML library takes a third of a
+ * second to start. Handles `a-b = "id:1.0"`, `a-b = { id = "id", version.ref = "v" }` (also over several
+ * lines) and `[plugins.a-b]` tables.
+ */
+fun catalogPlugins(text: String): Map<String, String> {
+    val out = LinkedHashMap<String, String>()
+    var table = ""
+    var open: String? = null // a [plugins.x] table, or an entry whose { ... } is not closed yet
+    val value = StringBuilder()
+    fun accessor(k: String) = unquote(k).replace('-', '.').replace('_', '.')
+    for (raw in text.lineSequence()) {
+        val line = raw.substringBefore('#').trim()
+        if (line.isEmpty()) continue
+        if (line.startsWith("[")) {
+            table = line.removePrefix("[").removeSuffix("]").trim()
+            open = table.removePrefix("plugins.").takeIf { table.startsWith("plugins.") }
+            continue
+        }
+        val entry = open
+        if (table == "plugins" && entry != null) { // the rest of a { ... } entry
+            value.append(' ').append(line)
+            if ('}' in line) { PLUGIN_ID.find(value)?.let { out[accessor(entry)] = it.groupValues[1] }; open = null }
+            continue
+        }
+        val k = line.substringBefore('=').trim()
+        val v = line.substringAfter('=', "").trim()
+        when {
+            table == "plugins" && v.startsWith("{") ->
+                if ('}' in v) PLUGIN_ID.find(v)?.let { out[accessor(k)] = it.groupValues[1] } else { open = k; value.setLength(0); value.append(v) }
+            table == "plugins" -> unquote(v).substringBefore(':').takeIf { it.isNotEmpty() }?.let { out[accessor(k)] = it }
+            entry != null && k == "id" -> out[accessor(entry)] = unquote(v)
+        }
+    }
+    return out
 }
 
 /** A project dependency; [sourceSet] is the Kotlin Multiplatform source set block it is in (commonMain, iosTest, ...). */
@@ -112,20 +152,7 @@ class GradleScan(private val p: Project, private val g: Graph) {
     }
 
     private fun readCatalogs() {
-        for (rel in p.tomlPaths.filter { it.endsWith("libs.versions.toml") }) {
-            val r = Toml.parse(p.read(rel))
-            if (r.hasErrors()) { g.addUnresolved("gradle_catalog", rel, rel, null, "invalid TOML"); continue }
-            val plugins = r.getTable("plugins") ?: continue
-            for (key in plugins.keySet()) {
-                val v = plugins.get(listOf(key))
-                val id = when (v) {
-                    is TomlTable -> v.getString("id")
-                    is String -> v.substringBefore(':')
-                    else -> null
-                } ?: continue
-                catalogPlugins[key.replace('-', '.').replace('_', '.')] = id
-            }
-        }
+        for (rel in p.tomlPaths.filter { it.endsWith("libs.versions.toml") }) catalogPlugins.putAll(catalogPlugins(p.read(rel)))
     }
 
     // ----- dependencies -----
@@ -270,11 +297,10 @@ class GradleScan(private val p: Project, private val g: Graph) {
             }
             if (registrations.isEmpty()) continue
             val classes = HashMap<String, String>()
+            val declares = registrations.values.associateWith { Regex("\\bclass\\s+${Regex.escape(it.substringAfterLast('.'))}\\b") }
             for (rel in (p.ktPaths + p.javaPaths).filter { it.startsWith(prefix) }) {
                 val text = p.read(rel)
-                for (cls in registrations.values) {
-                    if (Regex("\\bclass\\s+${Regex.escape(cls.substringAfterLast('.'))}\\b").containsMatchIn(text)) classes[cls] = rel
-                }
+                for ((cls, re) in declares) if (re.containsMatchIn(text)) classes[cls] = rel
             }
             for ((pid, cls) in registrations) {
                 val rel = classes[cls]

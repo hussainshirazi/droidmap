@@ -29,11 +29,12 @@ if ($expected) {
 Move-Item -Force "$jar.part" $jar
 
 # droidmap.cmd runs the jar with %JAVA_HOME%'s java, or the one on the PATH (Java 17 or newer).
+# A short run starts faster with only the quick JIT compiler and the serial GC.
 $cmd = @"
 @echo off
 set "DROIDMAP_JAVA=java"
 if defined JAVA_HOME set "DROIDMAP_JAVA=%JAVA_HOME%\bin\java"
-"%DROIDMAP_JAVA%" -jar "$jar" %*
+"%DROIDMAP_JAVA%" -XX:TieredStopAtLevel=1 -XX:+UseSerialGC -jar "$jar" %*
 "@
 Set-Content -Path (Join-Path $dir 'droidmap.cmd') -Value $cmd -Encoding ascii
 
