@@ -4,6 +4,7 @@ import droidmap.Call
 import droidmap.Code
 import droidmap.Fn
 import droidmap.Graph
+import droidmap.Param
 import droidmap.Source
 import droidmap.Type
 import droidmap.TypeRef
@@ -22,7 +23,10 @@ private val MODULE_CALLS = setOf("module", "lazyModule")
 private val DEFINITIONS = setOf("single", "factory", "scoped", "viewModel", "worker", "singleOf", "factoryOf", "scopedOf", "viewModelOf", "workerOf")
 /** Koin Annotations, and the JSR-330 ones Koin reads too (@Singleton, an @Inject constructor). */
 private val ANNOTATED = setOf("Single", "Factory", "Scoped", "KoinViewModel", "KoinWorker", "Singleton")
+/** Constructor parameters Koin does not look up: values passed with parametersOf, and properties. */
 private val NOT_INJECTED = setOf("InjectedParam", "Property", "Provided")
+
+private fun injected(p: Param) = p.anns.none { it.name in NOT_INJECTED }
 private val USES = setOf("get", "inject", "koinInject")
 
 fun koinModuleId(key: String) = "koin.module::$key"
@@ -100,22 +104,27 @@ class KoinScan(private val code: Code, private val g: Graph) {
             if (style == "viewModel") nodeForClass(g, made, "viewmodel")
             if (made !in provides) g.addEdge(did, classNode(made), "requires", s.path, d.line, mapOf("constructs" to true))
         }
-        // What it needs: each get() passed to the constructor (typed by the constructor's parameter), every other get<T>(),
-        // and for singleOf(::Repo) every constructor parameter.
+        needs(s, d, did, made, ctor, inside)
+    }
+
+    /**
+     * What a definition gets from Koin: for singleOf(::Repo), every constructor parameter; otherwise each get()
+     * passed to the constructor (typed by the parameter it is passed for), and every other typed get<T>().
+     */
+    private fun needs(s: Source, d: Call, did: String, made: Type?, ctor: Call?, inside: List<Call>) {
+        val koin = mapOf("koin" to true)
         val params = made?.ctors?.firstOrNull()?.params ?: emptyList()
         if (d.name.endsWith("Of") && made != null) {
-            for (prm in params) if (!prm.anns.has(*NOT_INJECTED.toTypedArray())) type(prm.type, made.src, made.psi)?.let { dep ->
-                g.addEdge(classId(made.fq), classNode(dep), "injects", s.path, d.line, mapOf("koin" to true))
-            }
+            for (prm in params.filter(::injected)) type(prm.type, made.src, made.psi)?.let { g.addEdge(classId(made.fq), classNode(it), "injects", s.path, d.line, koin) }
         }
         val ctorArgs = ctor?.args ?: emptyList()
         for (c in inside) {
             if (c.name != "get" || c.receiver != null) continue
             val at = ctorArgs.indexOfFirst { it.expr === c.psi }
-            val paramType = if (at >= 0) (ctorArgs[at].name?.let { n -> params.firstOrNull { it.name == n } } ?: params.getOrNull(at))?.type else null
-            val dep = type(c.typeArgs.firstOrNull() ?: c.assignedTo?.type ?: paramType, s, c.psi) ?: continue
-            if (at >= 0 && made != null) g.addEdge(classId(made.fq), classNode(dep), "injects", s.path, c.line, mapOf("koin" to true))
-            else g.addEdge(did, classNode(dep), "requires", s.path, c.line, mapOf("koin" to true))
+            val param = if (at >= 0) ctorArgs[at].name?.let { n -> params.firstOrNull { it.name == n } } ?: params.getOrNull(at) else null
+            val dep = type(c.typeArgs.firstOrNull() ?: c.assignedTo?.type ?: param?.type, s, c.psi) ?: continue
+            if (param != null && made != null) g.addEdge(classId(made.fq), classNode(dep), "injects", s.path, c.line, koin)
+            else g.addEdge(did, classNode(dep), "requires", s.path, c.line, koin)
         }
     }
 
@@ -161,8 +170,7 @@ class KoinScan(private val code: Code, private val g: Graph) {
         if (ann.name == "KoinViewModel") nodeForClass(g, t, "viewmodel")
         val supers = t.supers.mapNotNull { type(it.type, t.src, t.psi) } + ann.args.flatMap { classRefs(it.psi) }.mapNotNull { (n, at) -> index.resolveType(n, t.src, at) }
         for (sup in supers.distinct()) g.addEdge(classNode(sup), cid, "bound_by", t.src.path, t.line)
-        for (prm in t.ctors.firstOrNull()?.params ?: emptyList()) {
-            if (prm.anns.has(*NOT_INJECTED.toTypedArray())) continue
+        for (prm in (t.ctors.firstOrNull()?.params ?: emptyList()).filter(::injected)) {
             type(prm.type, t.src, t.psi)?.let { g.addEdge(cid, classNode(it), "injects", t.src.path, prm.line, mapOf("koin" to true)) }
         }
     }
@@ -173,10 +181,10 @@ class KoinScan(private val code: Code, private val g: Graph) {
         val fq = f.fq ?: return
         val provided = type(f.returns, f.src, f.psi) ?: return
         val did = g.addNode(funId(fq), "koin_definition", "${f.owner.name}.${f.name}", f.src.path, f.line, f.src.module,
-            mapOf("style" to f.anns.first { it.name in ANNOTATED }.name.lowercase(), "provides" to listOf(provided.fq), "source_set" to f.src.sourceSet))
+            mapOf("end_line" to f.endLine, "style" to f.anns.first { it.name in ANNOTATED }.name.lowercase(), "provides" to listOf(provided.fq),
+                "source_set" to f.src.sourceSet))
         g.addEdge(classNode(provided), did, "bound_by", f.src.path, f.line)
-        for (prm in f.params) {
-            if (prm.anns.has(*NOT_INJECTED.toTypedArray())) continue
+        for (prm in f.params.filter(::injected)) {
             type(prm.type, f.src, f.psi)?.let { g.addEdge(did, classNode(it), "requires", f.src.path, prm.line, mapOf("koin" to true)) }
         }
     }

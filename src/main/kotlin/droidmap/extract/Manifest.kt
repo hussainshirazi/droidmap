@@ -126,9 +126,12 @@ class ManifestScan(private val p: Project, private val code: Code, private val g
     }
 
     /** manifest-merger-debug-report.txt for debug, manifest-merger-demo-debug-report.txt for demoDebug. */
-    private fun reportFile(moduleDir: String, variant: String): String? = p.mergerReports.firstOrNull {
-        "/$it".startsWith("/$moduleDir/build/outputs/logs/".replace("//", "/")) &&
-            it.substringAfterLast('/').removePrefix("manifest-merger-").removeSuffix("-report.txt").replace("-", "").equals(variant, ignoreCase = true)
+    private fun reportFile(moduleDir: String, variant: String): String? {
+        val logs = if (moduleDir.isEmpty()) "build/outputs/logs/" else "$moduleDir/build/outputs/logs/"
+        return p.mergerReports.firstOrNull {
+            it.startsWith(logs) &&
+                it.substringAfterLast('/').removePrefix("manifest-merger-").removeSuffix("-report.txt").replace("-", "").equals(variant, ignoreCase = true)
+        }
     }
 
     private fun qualify(name: String, pkg: String?): String = when {
