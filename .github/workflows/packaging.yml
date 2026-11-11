@@ -1,0 +1,66 @@
+name: Packaging
+
+# Installs the latest release the ways the README describes, on each system. It also runs weekly
+# and by hand: the release workflow's own push (new versions in Formula/ and bucket/) starts no workflow.
+on:
+  push:
+    branches: [main]
+    paths: [install.sh, install.ps1, "Formula/**", "bucket/**", .github/workflows/packaging.yml]
+  schedule:
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+
+jobs:
+  install-script:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - run: sh install.sh
+      - run: ~/.local/bin/droidmap --version
+
+  install-powershell:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - run: ./install.ps1
+        shell: pwsh
+      - run: '& "$env:LOCALAPPDATA\droidmap\droidmap.cmd" --version; exit $LASTEXITCODE'
+        shell: pwsh
+
+  homebrew:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: |
+          brew tap hussainshirazi/droidmap "$GITHUB_WORKSPACE"
+          brew install hussainshirazi/droidmap/droidmap
+          brew test hussainshirazi/droidmap/droidmap
+          droidmap --version
+
+  scoop:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - shell: pwsh
+        run: |
+          Invoke-Expression "& {$(Invoke-RestMethod https://get.scoop.sh)} -RunAsAdmin"
+          $env:Path = "$env:USERPROFILE\scoop\shims;$env:Path"
+          scoop install ./bucket/droidmap.json
+          droidmap --version
+          exit $LASTEXITCODE

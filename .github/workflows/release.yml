@@ -1,7 +1,8 @@
 name: Release
 
-# Push a tag such as v0.1.0 to build droidmap.jar and attach it to a GitHub release.
-# (v*.*.* only: the moving v0 tag that action users pin to does not make a release.)
+# Push a tag such as v0.2.0 to build droidmap.jar, attach it (and its checksum) to a GitHub release,
+# move the v0 tag that Action users pin to, and point the Homebrew formula and Scoop manifest at it.
+# (v*.*.* only: moving v0 does not start another release.)
 on:
   push:
     tags: ["v*.*.*"]
@@ -22,6 +23,28 @@ jobs:
       - run: chmod +x gradlew && ./gradlew test fatJar
       - name: The tag matches the version in the code
         run: test "$(java -jar build/libs/droidmap.jar --version)" = "droidmap ${GITHUB_REF_NAME#v}"
-      - run: gh release create "$GITHUB_REF_NAME" build/libs/droidmap.jar --title "droidmap $GITHUB_REF_NAME" --generate-notes
+      - name: Create the release
         env:
           GH_TOKEN: ${{ github.token }}
+        run: |
+          cd build/libs && sha256sum droidmap.jar > droidmap.jar.sha256
+          gh release create "$GITHUB_REF_NAME" droidmap.jar droidmap.jar.sha256 --title "droidmap $GITHUB_REF_NAME" --generate-notes
+      - name: Move v0 to this release
+        if: startsWith(github.ref_name, 'v0.')
+        run: |
+          git tag -f v0 "$GITHUB_SHA"
+          git push -f origin v0
+      - name: Point Homebrew and Scoop at this release
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          sha=$(cut -d ' ' -f 1 build/libs/droidmap.jar.sha256)
+          git fetch --no-tags --depth=1 origin main
+          git checkout -B main origin/main
+          sed -i -E "s|download/v[0-9][^/]*/|download/v$version/|; s|^  version \".*\"|  version \"$version\"|; s|^  sha256 \".*\"|  sha256 \"$sha\"|" Formula/droidmap.rb
+          jq --arg v "$version" --arg h "$sha" \
+            '.version = $v | .hash = $h | .url = "https://github.com/hussainshirazi/droidmap/releases/download/v\($v)/droidmap.jar"' \
+            bucket/droidmap.json > bucket/droidmap.json.new && mv bucket/droidmap.json.new bucket/droidmap.json
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -am "Point Homebrew and Scoop at droidmap $version"
+          git push origin main
