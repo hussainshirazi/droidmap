@@ -117,7 +117,34 @@ droidmap mcp    [path]                               # run the MCP server over s
 
 Exit codes: 0 when done, 1 when `check` finds something at `--fail-on` or above (or `find` matches nothing), 2 for a usage or config error, 3 for an internal error.
 
-In CI, `droidmap check --format sarif > droidmap.sarif` produces a file that GitHub code scanning can show on pull requests. Add `droidmap-out/` to your `.gitignore` if you use `build`.
+`check --sarif FILE` also writes the findings as SARIF, which most CI systems and code review tools can show. Add `droidmap-out/` to your `.gitignore` if you use `build`.
+
+## In GitHub Actions
+
+```yaml
+name: droidmap
+on: [push, pull_request]
+
+jobs:
+  droidmap:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write   # to show findings on pull requests
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hussainshirazi/droidmap@v0
+```
+
+Findings show up as code scanning alerts, as notes on the pull request's changed lines, and in the job summary. The step fails on errors. The action needs no Java setup: it uses the JDK that GitHub's runners already have.
+
+| Input | Default | |
+|---|---|---|
+| `path` | `.` | the Android project's folder, when it is not the repository root |
+| `fail-on` | `error` | `warning` or `info` to be stricter, `never` to only report |
+| `upload-sarif` | `true` | set `false` on a private repository without GitHub Advanced Security (code scanning is free on public ones); the job summary still lists the findings |
+| `args` | | extra arguments for `droidmap check`, such as `--config tools/droidmap.toml` |
+| `version` | the pinned release | a droidmap release such as `0.1.0` |
 
 ## Rules
 

@@ -15,7 +15,7 @@ private val USAGE = """
     Usage: droidmap <command> [options]
 
       build  [path] [-o DIR] [--node-link]        scan and write droidmap-out/graph.json and REPORT.md
-      check  [path] [--format text|json|sarif] [--fail-on error|warning|info|never]
+      check  [path] [--format text|json|sarif] [--fail-on error|warning|info|never] [--sarif FILE]
       impact <node> [path] [--depth N] [--json]   what depends on a node
       show   <node> [path] [--json]                a node, its dependencies and users
       find   <text> [path] [--limit N] [--json]
@@ -100,6 +100,13 @@ class Cli(private val out: PrintStream = System.out, private val err: PrintStrea
 
     private fun title(r: Path) = r.fileName?.toString() ?: "project"
 
+    /** "android/" when the project root is the android folder under the current directory; "" otherwise. */
+    private fun sarifPrefix(root: Path): String {
+        val cwd = Path.of("").toAbsolutePath().normalize()
+        if (!root.startsWith(cwd) || root == cwd) return ""
+        return cwd.relativize(root).joinToString("/") + "/"
+    }
+
     fun run(argv: List<String>): Int {
         if (argv.isEmpty() || argv[0] in setOf("-h", "--help", "help")) {
             out.println(USAGE)
@@ -130,18 +137,23 @@ class Cli(private val out: PrintStream = System.out, private val err: PrintStrea
                 0
             }
             "check" -> {
-                val a = parseArgs(rest, common + setOf("--format", "--fail-on"), emptySet())
+                val a = parseArgs(rest, common + setOf("--format", "--fail-on", "--sarif"), emptySet())
                 val format = a.opt("--format") ?: "text"
                 val failOn = a.opt("--fail-on") ?: "error"
                 if (format !in setOf("text", "json", "sarif")) throw UsageError("--format is text, json or sarif")
                 if (failOn != "never" && failOn !in SEVERITY_ORDER) throw UsageError("--fail-on is error, warning, info or never")
-                val (g, cfg) = load(root(a.positionals.firstOrNull()), a)
+                val r = root(a.positionals.firstOrNull())
+                val (g, cfg) = load(r, a)
                 val findings = runChecks(g, cfg)
+                // SARIF paths are relative to where droidmap runs (the repository root in CI), so a
+                // project in a subfolder (droidmap check android) still points at the right files.
+                val prefix = sarifPrefix(r)
                 when (format) {
                     "json" -> out.println(jsonText(findings.map { it.toMap() }))
-                    "sarif" -> out.println(jsonText(toSarif(findings)))
+                    "sarif" -> out.println(jsonText(toSarif(findings, prefix)))
                     else -> out.println(formatFindings(findings))
                 }
+                a.opt("--sarif")?.let { Files.writeString(Path.of(it), jsonText(toSarif(findings, prefix)) + "\n") }
                 when {
                     failOn == "never" -> 0
                     findings.any { (SEVERITY_ORDER[it.severity] ?: 9) <= SEVERITY_ORDER.getValue(failOn) } -> 1

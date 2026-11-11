@@ -32,3 +32,30 @@ jobs:
         with:
           name: droidmap.jar
           path: build/libs/droidmap.jar
+
+  # The GitHub Action in action.yml, run on the sample with the jar built here.
+  action:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: gradle/actions/setup-gradle@v4
+      - run: chmod +x gradlew && ./gradlew fatJar
+        shell: bash
+      - uses: ./
+        id: droidmap
+        with:
+          path: src/test/resources/sample
+          jar: build/libs/droidmap.jar
+          fail-on: never
+          upload-sarif: "false"
+      - name: SARIF paths point into the repository
+        shell: bash
+        run: grep -q '"uri": "src/test/resources/sample/' "${{ steps.droidmap.outputs.sarif }}"

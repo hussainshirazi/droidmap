@@ -165,6 +165,18 @@ class CasesTest {
     }
 
     @Test
+    fun checkWritesSarifAlongsideTheText() {
+        val root = write(*app, "app/src/main/kotlin/com/x/Nav.kt" to """
+            package com.x
+            import androidx.navigation.compose.NavHost
+            fun AppNav(navController: NavHostController) { navController.navigate("nowhere") }""")
+        val sarif = root.resolve("out.sarif")
+        assertEquals(1, run("check", root.toString(), "--sarif", sarif.toString()))
+        val text = Files.readString(sarif)
+        assertTrue("nav-unknown-target" in text && "\"uri\": \"app/src/main/kotlin/com/x/Nav.kt\"" in text, text)
+    }
+
+    @Test
     fun configTyposAreErrors() {
         val root = write(*app, ".droidmap.toml" to "[rules]\n\"nav-unreachible\" = \"off\"")
         assertEquals(2, run("check", root.toString()))

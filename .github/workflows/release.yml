@@ -1,9 +1,10 @@
 name: Release
 
 # Push a tag such as v0.1.0 to build droidmap.jar and attach it to a GitHub release.
+# (v*.*.* only: the moving v0 tag that action users pin to does not make a release.)
 on:
   push:
-    tags: ["v*"]
+    tags: ["v*.*.*"]
 
 permissions:
   contents: write
@@ -19,7 +20,8 @@ jobs:
           java-version: "17"
       - uses: gradle/actions/setup-gradle@v4
       - run: chmod +x gradlew && ./gradlew test fatJar
-      - run: java -jar build/libs/droidmap.jar --version
+      - name: The tag matches the version in the code
+        run: test "$(java -jar build/libs/droidmap.jar --version)" = "droidmap ${GITHUB_REF_NAME#v}"
       - run: gh release create "$GITHUB_REF_NAME" build/libs/droidmap.jar --title "droidmap $GITHUB_REF_NAME" --generate-notes
         env:
           GH_TOKEN: ${{ github.token }}

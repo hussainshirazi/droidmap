@@ -1,0 +1,101 @@
+name: droidmap check
+description: Android-aware checks (Room migrations, navigation targets, Hilt bindings, Gradle module rules) shown on pull requests.
+author: hussainshirazi
+branding:
+  icon: map
+  color: green
+
+inputs:
+  path:
+    description: The Android project's root folder, relative to the repository root.
+    default: "."
+  fail-on:
+    description: "Fail the step on findings this severe or worse: error, warning, info or never."
+    default: error
+  upload-sarif:
+    description: Upload the findings to GitHub code scanning, so they show on pull requests (the job needs `security-events write`).
+    default: "true"
+  args:
+    description: Extra arguments for droidmap check, such as `--config tools/droidmap.toml`.
+    default: ""
+  version:
+    description: The droidmap release to use, such as 0.1.0. By default, the release this action was pinned to (or the latest one).
+    default: ""
+  jar:
+    description: Path to a droidmap.jar to use instead of downloading one.
+    default: ""
+
+outputs:
+  sarif:
+    description: Path of the SARIF file with the findings.
+    value: ${{ steps.check.outputs.sarif }}
+
+runs:
+  using: composite
+  steps:
+    - name: Get droidmap
+      id: setup
+      shell: bash
+      env:
+        INPUT_VERSION: ${{ inputs.version }}
+        INPUT_JAR: ${{ inputs.jar }}
+        ACTION_REF: ${{ github.action_ref }}
+      run: |
+        set -euo pipefail
+        # Java 17+: the runner's preinstalled JDKs first, so the job's own JAVA_HOME is left alone.
+        java=""
+        for v in JAVA_HOME_21_X64 JAVA_HOME_21_ARM64 JAVA_HOME_21_arm64 JAVA_HOME_17_X64 JAVA_HOME_17_ARM64 JAVA_HOME_17_arm64; do
+          d="${!v:-}"
+          if [ -n "$d" ] && { [ -x "$d/bin/java" ] || [ -x "$d/bin/java.exe" ]; }; then java="$d/bin/java"; break; fi
+        done
+        if [ -z "$java" ]; then java="${JAVA_HOME:+$JAVA_HOME/bin/}java"; fi
+        echo "java=$java" >> "$GITHUB_OUTPUT"
+        if [ -n "$INPUT_JAR" ]; then echo "jar=$INPUT_JAR" >> "$GITHUB_OUTPUT"; exit 0; fi
+        release="$INPUT_VERSION"
+        if [ -z "$release" ] && [[ "$ACTION_REF" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then release="${ACTION_REF#v}"; fi
+        if [ -n "$release" ]; then
+          url="https://github.com/hussainshirazi/droidmap/releases/download/v$release/droidmap.jar"
+        else
+          url="https://github.com/hussainshirazi/droidmap/releases/latest/download/droidmap.jar"
+        fi
+        curl -fsSL --retry 3 -o "$RUNNER_TEMP/droidmap.jar" "$url"
+        echo "jar=$RUNNER_TEMP/droidmap.jar" >> "$GITHUB_OUTPUT"
+
+    - name: Run droidmap check
+      id: check
+      shell: bash
+      env:
+        JAVA: ${{ steps.setup.outputs.java }}
+        JAR: ${{ steps.setup.outputs.jar }}
+        INPUT_PATH: ${{ inputs.path }}
+        INPUT_FAIL_ON: ${{ inputs.fail-on }}
+        INPUT_ARGS: ${{ inputs.args }}
+      run: |
+        set +e
+        sarif="$RUNNER_TEMP/droidmap.sarif"
+        # shellcheck disable=SC2086 # args is split into words on purpose
+        "$JAVA" -jar "$JAR" check "$INPUT_PATH" --fail-on "$INPUT_FAIL_ON" --sarif "$sarif" $INPUT_ARGS > "$RUNNER_TEMP/droidmap.txt"
+        code=$?
+        cat "$RUNNER_TEMP/droidmap.txt"
+        { echo "### droidmap"; echo; echo '```'; cat "$RUNNER_TEMP/droidmap.txt"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+        echo "code=$code" >> "$GITHUB_OUTPUT"
+        if [ -f "$sarif" ]; then echo "sarif=$sarif" >> "$GITHUB_OUTPUT"; fi
+
+    - name: Upload to code scanning
+      # Pull requests from forks get a read-only token, which cannot upload: the job summary still has the findings.
+      if: inputs.upload-sarif == 'true' && steps.check.outputs.sarif != '' && !github.event.pull_request.head.repo.fork
+      uses: github/codeql-action/upload-sarif@v3
+      with:
+        sarif_file: ${{ steps.check.outputs.sarif }}
+        category: droidmap
+
+    - name: Result
+      shell: bash
+      env:
+        CODE: ${{ steps.check.outputs.code }}
+      run: |
+        case "$CODE" in
+          0) ;;
+          1) echo "::error::droidmap found problems at or above the fail-on severity"; exit 1 ;;
+          *) echo "::error::droidmap could not run (exit code $CODE)"; exit "$CODE" ;;
+        esac

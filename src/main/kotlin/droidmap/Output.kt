@@ -14,7 +14,8 @@ fun formatFindings(findings: List<Finding>): String {
     return lines.joinToString("\n")
 }
 
-fun toSarif(findings: List<Finding>): Map<String, Any?> {
+/** SARIF 2.1.0 for GitHub code scanning; [prefix] is put before every file path (see `check --sarif`). */
+fun toSarif(findings: List<Finding>, prefix: String = ""): Map<String, Any?> {
     val level = mapOf("error" to "error", "warning" to "warning", "info" to "note")
     val rules = RULES.map { (id, v) ->
         linkedMapOf("id" to id, "shortDescription" to mapOf("text" to v.second),
@@ -23,7 +24,7 @@ fun toSarif(findings: List<Finding>): Map<String, Any?> {
     val results = findings.map { f ->
         val r = linkedMapOf<String, Any?>("ruleId" to f.rule, "level" to (level[f.severity] ?: "note"), "message" to mapOf("text" to f.message))
         if (f.file != null) {
-            val phys = linkedMapOf<String, Any?>("artifactLocation" to mapOf("uri" to f.file))
+            val phys = linkedMapOf<String, Any?>("artifactLocation" to mapOf("uri" to prefix + f.file))
             if (f.line != null) phys["region"] = mapOf("startLine" to f.line)
             r["locations"] = listOf(mapOf("physicalLocation" to phys))
         }
