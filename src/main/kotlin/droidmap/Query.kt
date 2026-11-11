@@ -51,10 +51,11 @@ private val NOT_IMPACT = setOf("migrates", "has_schema")
 /** Hilt indirection (interface -> @Binds/@Provides function -> implementation) is one dependency in the code. */
 private val FREE_HOPS = setOf("bound_by", "requires")
 
+/** A node that depends on the impacted one: it [via]s (an edge kind) [through], which is nearer to it. */
 class Dependent(val id: String, val label: String, val kind: String, val depth: Int, val via: String, val through: String,
-                val file: String?, val line: Int?, val module: String?) {
+                val throughLabel: String, val file: String?, val line: Int?, val module: String?) {
     fun toMap() = linkedMapOf("id" to id, "label" to label, "kind" to kind, "depth" to depth, "via" to via, "through" to through,
-        "file" to file, "line" to line, "module" to module)
+        "through_label" to throughLabel, "file" to file, "line" to line, "module" to module)
 }
 
 class Impact(val node: Node, val depth: Int, val dependents: List<Dependent>, val modules: List<String>,
@@ -88,7 +89,7 @@ fun impact(g: Graph, id: String, depth: Int = 4): Impact {
     val dependents = seen.mapNotNull { (nid, v) ->
         val e = v.second ?: return@mapNotNull null
         val n = g.nodes.getValue(nid)
-        Dependent(nid, n.label, n.kind, v.first, e.kind, e.target, n.file, n.line, n.module)
+        Dependent(nid, n.label, n.kind, v.first, e.kind, e.target, g.label(e.target), n.file, n.line, n.module)
     }.sortedWith(compareBy({ it.depth }, { it.kind }, { it.id }))
     val root = g.nodes.getValue(id)
     val modules = (dependents.mapNotNull { it.module } + listOfNotNull(root.module)).toSortedSet().toList()
@@ -113,11 +114,9 @@ fun formatImpact(r: Impact, limit: Int = 200): String {
     if (r.dependents.isEmpty()) {
         lines.add("Nothing in the graph depends on it.")
     } else {
-        lines.add("${r.dependents.size} dependents (depth <= ${r.depth}):")
-        val viaText = mapOf("bound_by" to "provided by a binding that needs it", "requires" to "a binding that needs it")
+        lines.add("${r.dependents.size} dependents, nearest first (depth, dependent, how it depends; depth <= ${r.depth}):")
         for (x in r.dependents.take(limit)) {
-            val indent = "  ".repeat(maxOf(0, x.depth - 1))
-            lines.add("  $indent${x.label} [${x.kind}] ${viaText[x.via] ?: "via ${x.via}"}  ${loc(x.file, x.line)}")
+            lines.add("  ${x.depth}  ${x.label} [${x.kind}] ${x.via} ${x.throughLabel}  ${loc(x.file, x.line)}")
         }
         if (r.dependents.size > limit) lines.add("  ... ${r.dependents.size - limit} more")
     }

@@ -8,11 +8,11 @@ val RULES: Map<String, Pair<String, String>> = sortedMapOf(
     "room-migration-path" to ("error" to "Every known schema version has a migration path to the current version"),
     "room-schema-missing" to ("warning" to "Schema JSON is exported for the current version and every version before it"),
     "room-migration-untested" to ("warning" to "Every migration step is run by a MigrationTestHelper test"),
-    "room-migration-unused" to ("warning" to "Every manual Migration is referenced (for example in addMigrations)"),
+    "room-migration-unused" to ("warning" to "Every manual Migration is used by app code (for example in addMigrations), not only by tests"),
     "room-destructive-fallback" to ("warning" to "fallbackToDestructiveMigration deletes user data when a migration is missing"),
     "room-insert-replace" to ("off" to "@Insert/@Upsert with OnConflictStrategy.REPLACE deletes and re-inserts rows"),
     "nav-unknown-target" to ("error" to "navigate() to a route or key that no destination registers"),
-    "nav-unreachable" to ("warning" to "A destination that nothing navigates to, starts at or references"),
+    "nav-unreachable" to ("warning" to "A destination that nothing navigates to, starts at, deep-links to, opens from a menu or references"),
     "hilt-missing-binding" to ("warning" to "An injected project type with no @Inject constructor, @Provides or @Binds"),
     "hilt-duplicate-binding" to ("error" to "The same type and qualifier is bound twice in one source set"),
     "gradle-unknown-project" to ("error" to "A project dependency on a module that settings does not include"),
@@ -95,8 +95,8 @@ private fun room(g: Graph): List<Finding> {
     for (n in g.byKind("room_migration")) {
         if (n.attrs.str("style") == "manual" && n.attrs.int("references") == 0) {
             out.add(finding("room-migration-unused",
-                "${n.attrs.str("name")} (${n.attrs.int("from_version")}->${n.attrs.int("to_version")}) is never referenced: " +
-                    "is it passed to addMigrations()?", n.file, n.line, n.id))
+                "${n.attrs.str("name")} (${n.attrs.int("from_version")}->${n.attrs.int("to_version")}) is never used by app code " +
+                    "(tests aside): is it passed to addMigrations()?", n.file, n.line, n.id))
         }
     }
     for (fb in g.meta.maps("room_destructive_fallback")) {
@@ -106,7 +106,7 @@ private fun room(g: Graph): List<Finding> {
     for (e in g.edgesOf("writes")) for (r in e.attrs.maps("replace")) {
         out.add(finding("room-insert-replace",
             "${r.str("function")} uses OnConflictStrategy.REPLACE, which deletes the old row (and cascades) instead of updating it",
-            e.file, r.int("line"), e.source))
+            r.str("file") ?: e.file, r.int("line"), e.source))
     }
     return out
 }
@@ -125,9 +125,12 @@ private fun nav(g: Graph): List<Finding> {
             continue
         }
         val reached = incoming.any { it.kind == "navigates_to" || it.kind == "starts_at" }
-        if (reached || (n.attrs.int("references") ?: 0) > 0 || n.attrs.bool("graph")) continue
+        val entered = n.attrs.bool("deep_link") || n.attrs.bool("menu_item") || (n.attrs.int("references") ?: 0) > 0
+        if (reached || entered || n.attrs.bool("graph")) continue
         val hint = if (dynamic > 0) " ($dynamic navigate calls could not be resolved)" else ""
-        out.add(finding("nav-unreachable", "Nothing navigates to ${n.label} and it is not a start destination$hint", n.file, n.line, n.id))
+        out.add(finding("nav-unreachable",
+            "Nothing navigates to ${n.label}: it is not a start destination, deep link or menu item, and nothing else refers to it$hint",
+            n.file, n.line, n.id))
     }
     return out
 }

@@ -49,15 +49,16 @@ warning room-migration-untested      core/database/.../AppDatabase.kt:16
 $ droidmap impact ItemDao
 Impact of ItemDao [room_dao] (core/database/.../ItemDao.kt:9)
 
-9 dependents (depth <= 4):
-  ItemRepository [class] provided by a binding that needs it  core/data/.../Repositories.kt:6
-  DataModule.bindItems [hilt_provider] a binding that needs it  core/data/.../Modules.kt:59
-  OfflineItemRepository [injectable] via injects  core/data/.../Repositories.kt:9
-  AppDatabase [room_database] via contains_dao  core/database/.../AppDatabase.kt:16
-    MainActivity [component] via injects  app/.../MainActivity.kt:11
-    HomeViewModel [viewmodel] via injects  feature/home/.../HomeViewModel.kt:11
-      HomeScreen [screen] via uses_viewmodel  feature/home/.../HomeScreen.kt:7
-        home [nav_destination] via shows  app/.../AppNav.kt:28
+9 dependents, nearest first (depth, dependent, how it depends; depth <= 4):
+  1  ItemRepository [class] bound_by DataModule.bindItems  core/data/.../Repositories.kt:6
+  1  DataModule.bindItems [hilt_provider] requires OfflineItemRepository  core/data/.../Modules.kt:59
+  1  OfflineItemRepository [injectable] injects ItemDao  core/data/.../Repositories.kt:9
+  1  AppDatabase [room_database] contains_dao ItemDao  core/database/.../AppDatabase.kt:16
+  2  MainActivity [component] injects ItemRepository  app/.../MainActivity.kt:11
+  2  HomeViewModel [viewmodel] injects ItemRepository  feature/home/.../HomeViewModel.kt:11
+  3  :app [module] declares MainActivity  app/build.gradle.kts:1
+  3  HomeScreen [screen] uses_viewmodel HomeViewModel  feature/home/.../HomeScreen.kt:7
+  4  home [nav_destination] shows HomeScreen  app/.../AppNav.kt:28
 
 Modules with impacted code: :app, :core:data, :core:database, :feature:home
 Modules that depend on :core:database: :app, :core:data, :feature:detail-screen, :feature:home
@@ -93,7 +94,7 @@ Cursor, VS Code, Windsurf and other clients take the same command in their MCP c
 |---|---|
 | **Gradle** | Modules from `settings.gradle(.kts)`; `project(":x")` and type-safe `projects.x.y` dependencies in Kotlin DSL and Groovy; plugins from the version catalog; and the project dependencies that **convention plugins in an included build** (`build-logic`) add to every module that applies them. |
 | **Room** | Databases, entities, DAOs (the tables each `@Query` uses and the entities each `@Insert`, `@Update`, `@Delete` or `@Upsert` writes), manual and auto migrations, the exported schema JSON files, and **which `MigrationTestHelper` test covers which migration step**. |
-| **Navigation** | Compose Navigation with string routes (built from constants, templates and helper functions) or type-safe routes, **Navigation 3** (`entry<Key>`), and XML navigation graphs: destinations, the screen each one shows, start destinations, and `navigate(...)` calls, including calls through your own helpers such as `navigateToTab(route)`. |
+| **Navigation** | Compose Navigation with string routes (built from constants, templates and helper functions) or type-safe routes, **Navigation 3** (`entry<Key>`), and XML navigation graphs: destinations, the screen each one shows, start destinations, deep links, menu items that open a destination, and `navigate(...)` calls, including calls through your own helpers such as `navigateToTab(route)`. |
 | **Hilt** | `@HiltViewModel`s, `@Inject` constructors and fields, `@Provides` and `@Binds` with qualifiers, entry points, and which screens and activities use which ViewModel. |
 | **Manifest** | Permissions (including `tools:node="remove"`) and components. |
 
@@ -114,6 +115,8 @@ droidmap mcp    [path]                               # run the MCP server over s
 
 `<node>` can be an id, a name or part of a name: `TopicEntity`, `:core:data`, `"editor?id={id}"`, `HomeViewModel`. `check`, `impact`, `show`, `find` and `report` also take `--config FILE` and `--graph FILE` (use a saved `graph.json` instead of scanning); `build` and `mcp` take `--config FILE`.
 
+Exit codes: 0 when done, 1 when `check` finds something at `--fail-on` or above (or `find` matches nothing), 2 for a usage or config error, 3 for an internal error.
+
 In CI, `droidmap check --format sarif > droidmap.sarif` produces a file that GitHub code scanning can show on pull requests. Add `droidmap-out/` to your `.gitignore` if you use `build`.
 
 ## Rules
@@ -123,11 +126,11 @@ In CI, `droidmap check --format sarif > droidmap.sarif` produces a file that Git
 | `room-migration-path` | error | a known schema version with no migration path to the current version |
 | `room-schema-missing` | warning | no exported schema JSON for the current version or an earlier one |
 | `room-migration-untested` | warning | migration steps no `MigrationTestHelper` test runs |
-| `room-migration-unused` | warning | a manual `Migration` that is never referenced (not passed to `addMigrations`?) |
+| `room-migration-unused` | warning | a manual `Migration` that app code never uses (not passed to `addMigrations`?), even if a test runs it |
 | `room-destructive-fallback` | warning | `fallbackToDestructiveMigration()`, which deletes user data |
 | `room-insert-replace` | off | `@Insert(onConflict = REPLACE)`, which deletes and re-inserts rows |
 | `nav-unknown-target` | error | `navigate()` to a route or key no destination registers |
-| `nav-unreachable` | warning | a destination nothing navigates to, starts at or references |
+| `nav-unreachable` | warning | a destination nothing navigates to, starts at or refers to, and that no deep link or menu item opens |
 | `hilt-missing-binding` | warning | an injected project type with no `@Inject` constructor, `@Provides` or `@Binds` |
 | `hilt-duplicate-binding` | error | the same type and qualifier bound twice in one source set |
 | `gradle-unknown-project` | error | a project dependency on a module settings does not include |
@@ -156,7 +159,7 @@ reason = "features talk to each other through :core modules"
 paths = ["benchmarks/**"]
 ```
 
-`from`, `to` and `ignore.paths` are glob patterns where `*` also matches `:` and `/`. A forbid rule skips test dependencies unless it says `tests = true`, and `allow_same_parent = true` lets siblings such as `:feature:a:impl` and `:feature:a:api` depend on each other.
+An unknown rule name or severity is an error, so a typo never leaves a rule silently unchanged. `from`, `to` and `ignore.paths` are glob patterns where `*` also matches `:` and `/`. A forbid rule skips test dependencies unless it says `tests = true`, and `allow_same_parent = true` lets siblings such as `:feature:a:impl` and `:feature:a:api` depend on each other.
 
 ## The graph
 

@@ -35,6 +35,8 @@ private val SQL_TABLE = Regex("""\b(?:FROM|JOIN|INTO|UPDATE|TABLE)\s+[`"\[]?(\w+
 private val WRITE_ANNS = listOf("Insert", "Update", "Delete", "Upsert")
 private val FALLBACKS = setOf("fallbackToDestructiveMigration", "fallbackToDestructiveMigrationFrom", "fallbackToDestructiveMigrationOnDowngrade")
 private val COLLECTIONS = setOf("List", "Collection", "Set", "Iterable", "Array")
+private val REPLACE = Regex("\\bREPLACE\\b")
+private val HELPER_CALLS = setOf("createDatabase", "runMigrationsAndValidate")
 
 fun migrationId(db: String?, from: Int, to: Int, name: String) = "room.migration::${db ?: "?"}:$from->$to:$name"
 fun schemaId(db: String, version: Int) = "room.schema::$db@$version"
@@ -45,7 +47,7 @@ class RoomScan(private val p: Project, private val g: Graph) {
     private val entities = HashMap<String, KtClassOrObject>()
     private val tables = HashMap<String, String>() // lower table name -> entity fq
     private val daos = LinkedHashMap<String, Pair<KtClassOrObject, Source>>()
-    private class Manual(val id: String, val name: String)
+    private class Manual(val id: String, val name: String, val inTests: Boolean)
     private val manual = ArrayList<Manual>()
 
     fun run() {
@@ -122,33 +124,57 @@ class RoomScan(private val p: Project, private val g: Graph) {
         }
     }
 
+    /**
+     * A DAO function, with where its types resolve. An inherited one (`ItemDao : BaseDao<Item>`)
+     * comes with the base's type parameters bound to the DAO's arguments, as class names.
+     */
+    private class DaoFun(val fn: KtNamedFunction, val src: Source, val scope: KtClassOrObject, val typeArgs: Map<String, String>)
+
+    private fun daoFunctions(c: KtClassOrObject, s: Source, typeArgs: Map<String, String>, seen: MutableSet<KtClassOrObject>): List<DaoFun> {
+        if (!seen.add(c)) return emptyList()
+        val out = c.declarations.filterIsInstance<KtNamedFunction>().mapTo(ArrayList()) { DaoFun(it, s, c, typeArgs) }
+        for (entry in c.superTypeListEntries) {
+            val t = TypeRef.of(entry.typeReference) ?: continue
+            val base = p.index.resolveType(t.name, s, c) ?: continue
+            val bs = p.index.sourceOf(base) ?: continue
+            val bound = base.typeParameters.mapNotNull { it.name }.zip(t.args).mapNotNull { (param, arg) ->
+                (typeArgs[arg.name] ?: p.index.resolveType(arg.name, s, c)?.fq())?.let { param to it }
+            }.toMap()
+            out += daoFunctions(base, bs, bound, seen)
+        }
+        return out
+    }
+
     private fun dao(fq: String, c: KtClassOrObject, s: Source) {
         class Agg(val line: Int) { val functions = sortedSetOf<String>(); val replace = ArrayList<Map<String, Any?>>() }
         val agg = sortedMapOf<String, Agg>()
-        for (fn in c.declarations.filterIsInstance<KtNamedFunction>()) {
+        for (df in daoFunctions(c, s, emptyMap(), HashSet())) {
+            val fn = df.fn
+            // Edges live in the DAO's file: an inherited function points at the DAO's own line.
+            val line = if (df.src == s) s.line(fn) else s.line(c)
             fn.ann("Query")?.let { q ->
                 val arg = q.valueArguments.filterIsInstance<KtValueArgument>().let { it.arg("value") ?: it.arg(null, 0) }
                 val sql = p.eval.eval(arg?.getArgumentExpression()) as? String
                 if (sql == null) {
-                    g.addUnresolved("room_query", "${c.name}.${fn.name}", s.path, s.line(fn), "SQL is not a constant")
+                    g.addUnresolved("room_query", "${c.name}.${fn.name}", df.src.path, df.src.line(fn), "SQL is not a constant")
                 } else {
                     for (m in SQL_TABLE.findAll(sql)) {
                         val efq = tables[m.groupValues[1].lowercase()] ?: continue
-                        agg.getOrPut("queries\u0000$efq") { Agg(s.line(fn)) }.functions.add(fn.name ?: "?")
+                        agg.getOrPut("queries\u0000$efq") { Agg(line) }.functions.add(fn.name ?: "?")
                     }
                 }
             }
             for (wa in WRITE_ANNS) {
                 val ann = fn.ann(wa) ?: continue
-                val replace = ann.valueArgumentList?.text?.let { Regex("\\bREPLACE\\b").containsMatchIn(it) } == true
+                val replace = ann.valueArgumentList?.text?.let { REPLACE.containsMatchIn(it) } == true
                 for (prm in fn.valueParameters) {
                     var ty = TypeRef.of(prm.typeReference)
                     while (ty != null && ty.simple in COLLECTIONS && ty.args.isNotEmpty()) ty = ty.args[0]
-                    val e = ty?.let { p.index.resolveType(it.name, s, c) }?.fq() ?: continue
+                    val e = ty?.let { df.typeArgs[it.name] ?: p.index.resolveType(it.name, df.src, df.scope)?.fq() } ?: continue
                     if (e !in entities) continue
-                    val a = agg.getOrPut("writes\u0000$e") { Agg(s.line(fn)) }
+                    val a = agg.getOrPut("writes\u0000$e") { Agg(line) }
                     a.functions.add(fn.name ?: "?")
-                    if (replace) a.replace.add(linkedMapOf("function" to fn.name, "line" to s.line(ann)))
+                    if (replace) a.replace.add(linkedMapOf("function" to fn.name, "file" to df.src.path, "line" to df.src.line(ann)))
                 }
             }
         }
@@ -196,7 +222,7 @@ class RoomScan(private val p: Project, private val g: Graph) {
             val mid = migrationId(db, from, to, name)
             g.addNode(mid, "room_migration", "$name $from->$to", s.path, line, s.module,
                 mapOf("db" to db, "from_version" to from, "to_version" to to, "style" to "manual", "name" to name, "owner" to owner))
-            if (named != null) manual.add(Manual(mid, name)) // one passed inline is used where it is written
+            if (named != null) manual.add(Manual(mid, name, s.isTest)) // one passed inline is used where it is written
             if (db != null) g.addEdge(mid, classId(db), "migrates", s.path, line)
         }
     }
@@ -213,11 +239,15 @@ class RoomScan(private val p: Project, private val g: Graph) {
         return prop.takeIf { init == expr || (init as? KtQualifiedExpression)?.selectorExpression == expr }
     }
 
-    /** How often each manual migration's name is used (0 = never passed to addMigrations). */
+    /**
+     * How often app code uses each manual migration's name (0 = never passed to addMigrations).
+     * A test that runs a migration does not count: that is exactly the one written, tested and never registered.
+     */
     private fun countReferences() {
         if (manual.isEmpty()) return
-        val counts = ReferenceCounts(p, includeTests = true)
-        for (m in manual) g.nodes[m.id]!!.attrs["references"] = counts[m.name]
+        val app = ReferenceCounts(p, includeTests = false)
+        val all by lazy { ReferenceCounts(p, includeTests = true) }
+        for (m in manual) g.nodes[m.id]!!.attrs["references"] = (if (m.inTests) all else app)[m.name]
     }
 
     // ----- schema files -----
@@ -249,6 +279,16 @@ class RoomScan(private val p: Project, private val g: Graph) {
     }
 
     // ----- tests -----
+    /**
+     * The version argument of createDatabase / runMigrationsAndValidate: second in the classic
+     * MigrationTestHelper (name, version, ...), first in the driver one of Room 2.7+ (version, ...).
+     */
+    private fun versionArg(args: List<KtValueArgument>): KtValueArgument? {
+        args.arg("version")?.let { return it }
+        val first = args.arg(null, 0)
+        return if (p.eval.eval(first?.getArgumentExpression()) is Long) first else args.arg(null, 1)
+    }
+
     private fun tests() {
         val migByDb = g.byKind("room_migration").groupBy { it.attrs["db"] as String? }
         val migNames = manual.associate { it.name to it.id }
@@ -268,17 +308,17 @@ class RoomScan(private val p: Project, private val g: Graph) {
                 val explicit = HashSet<String>()
                 var generic = false
                 val calls = body.collectDescendantsOfType<KtCallExpression> {
-                    it.calleeName() in setOf("createDatabase", "runMigrationsAndValidate") && it.getStrictParentOfType<KtNamedFunction>() == fn
+                    it.calleeName() in HELPER_CALLS && it.getStrictParentOfType<KtNamedFunction>() == fn
                 }
                 for (call in calls) {
-                    val v = p.eval.evalInt(call.valueArguments.arg(null, 1)?.getArgumentExpression())
+                    val v = p.eval.evalInt(versionArg(call.valueArguments)?.getArgumentExpression())
                     when {
                         v == null -> generic = true
                         call.calleeName() == "createDatabase" -> created.add(v)
                         else -> validated.add(v)
                     }
                     if (call.calleeName() == "runMigrationsAndValidate") {
-                        for (a in call.valueArguments.drop(3)) for (r in a.collectDescendantsOfType<KtNameReferenceExpression>()) {
+                        for (a in call.valueArguments) for (r in a.collectDescendantsOfType<KtNameReferenceExpression>()) {
                             migNames[r.getReferencedName()]?.let { explicit.add(it) }
                         }
                     }

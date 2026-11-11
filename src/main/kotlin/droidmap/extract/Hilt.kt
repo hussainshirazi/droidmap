@@ -185,9 +185,12 @@ class HiltScan(private val p: Project, private val g: Graph) {
                 }
             }
             val body = f.bodyExpression ?: continue
-            for (call in body.collectDescendantsOfType<KtCallExpression> { it.calleeName() in VM_CALLS && it.typeArguments.isNotEmpty() }) {
+            for (call in body.collectDescendantsOfType<KtCallExpression> { it.calleeName() in VM_CALLS }) {
                 if (call.getStrictParentOfType<KtNamedFunction>() != f) continue
-                val t = typeDecl(s, call.typeArguments[0].typeReference, f) ?: continue
+                // hiltViewModel<HomeViewModel>(), or val vm: HomeViewModel = hiltViewModel()
+                val ref = call.typeArguments.firstOrNull()?.typeReference
+                    ?: (call.parent as? KtProperty)?.takeIf { it.initializer == call }?.typeReference ?: continue
+                val t = typeDecl(s, ref, f) ?: continue
                 if (t.fq() in viewmodels) nodeForFun(g, f, s, "function")?.let {
                     g.addEdge(it, classId(t.fq()!!), "uses_viewmodel", s.path, s.line(call))
                 }

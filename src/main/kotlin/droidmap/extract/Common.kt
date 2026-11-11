@@ -14,6 +14,9 @@ import org.jetbrains.kotlin.psi.KtPackageDirective
 import org.jetbrains.kotlin.psi.psiUtil.collectDescendantsOfType
 import org.jetbrains.kotlin.psi.psiUtil.getStrictParentOfType
 
+/** An attribute that is set only when true, so graphs stay small. */
+fun flag(b: Boolean): Boolean? = if (b) true else null
+
 fun classId(fq: String) = "class::$fq"
 fun funId(fq: String) = "fun::$fq"
 

@@ -114,7 +114,11 @@ class McpServer(private val root: Path, private val configPath: Path? = null, pr
     }
 
     private fun callText(name: String, args: Map<String, Any?>): String {
-        val (g, cfg) = current()
+        val (g, cfg) = try {
+            current()
+        } catch (e: IllegalArgumentException) {
+            throw ToolError("cannot read the config: ${e.message}")
+        }
         when (name) {
             "droidmap_check" -> {
                 val floor = SEVERITY_ORDER[args["min_severity"] as? String ?: "info"] ?: 2

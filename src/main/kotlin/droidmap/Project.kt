@@ -35,20 +35,30 @@ class Config(
     val ignorePaths: List<String> = emptyList(),
 ) {
     companion object {
-        /** Reads .droidmap.toml; throws IllegalArgumentException when it is not valid TOML. */
+        private val SEVERITIES = listOf("error", "warning", "info", "off")
+
+        private fun strings(raw: Any?): List<String>? = (raw as? TomlArray)?.let { arr -> (0 until arr.size()).map { arr.get(it).toString() } }
+
+        /**
+         * Reads .droidmap.toml. Throws IllegalArgumentException when it is not valid TOML or names
+         * a rule or severity that does not exist, so a typo never silently leaves a rule as it was.
+         */
         fun load(root: Path, path: Path? = null): Config {
             val p = path ?: root.resolve(CONFIG_NAME)
-            if (!Files.isRegularFile(p)) return Config()
+            if (!Files.isRegularFile(p)) {
+                require(path == null) { "$p does not exist" }
+                return Config()
+            }
             val r = Toml.parse(Files.readString(p))
-            if (r.hasErrors()) throw IllegalArgumentException("$p: ${r.errors().first()}")
+            require(!r.hasErrors()) { "$p: ${r.errors().first()}" }
             val rules: TomlTable? = r.getTable("rules")
             val severities = HashMap<String, String>()
             if (rules != null) for (k in rules.keySet()) {
                 val v: Any? = rules.get(listOf(k))
+                require(k in RULES) { "$p: unknown rule \"$k\" in [rules] (`droidmap rules` lists them)" }
+                require(v.toString() in SEVERITIES) { "$p: rule \"$k\" is set to \"$v\"; use ${SEVERITIES.joinToString(", ")}" }
                 severities[k] = v.toString()
             }
-            val allowedRaw: Any? = r.get(listOf("manifest", "allowed_permissions"))
-            val allowed: List<String>? = (allowedRaw as? TomlArray)?.let { arr -> (0 until arr.size()).map { arr.get(it).toString() } }
             val forbidRaw: Any? = r.get(listOf("gradle", "forbid"))
             val forbid = ArrayList<Map<String, Any?>>()
             (forbidRaw as? TomlArray)?.let { arr ->
@@ -59,12 +69,12 @@ class Config(
                         val v: Any? = t.get(listOf(k))
                         m[k] = v
                     }
+                    require(m["from"] is String && m["to"] is String) { "$p: every [[gradle.forbid]] needs from and to" }
                     forbid.add(m)
                 }
             }
-            val ignoreRaw: Any? = r.get(listOf("ignore", "paths"))
-            val ignore: List<String> = (ignoreRaw as? TomlArray)?.let { arr -> (0 until arr.size()).map { arr.get(it).toString() } } ?: emptyList()
-            return Config(severities, allowed, forbid, ignore)
+            return Config(severities, strings(r.get(listOf("manifest", "allowed_permissions"))), forbid,
+                strings(r.get(listOf("ignore", "paths"))) ?: emptyList())
         }
     }
 }
@@ -157,6 +167,7 @@ class Project(root: Path, config: Config? = null) {
     val gradlePaths = ArrayList<String>()
     val manifestPaths = ArrayList<String>()
     val navXmlPaths = ArrayList<String>()
+    val menuXmlPaths = ArrayList<String>()
     val tomlPaths = ArrayList<String>()
     val jsonPaths = ArrayList<String>()
     val skipped = ArrayList<String>()
@@ -200,6 +211,7 @@ class Project(root: Path, config: Config? = null) {
                 low.endsWith(".gradle.kts") || low.endsWith(".gradle") -> gradlePaths
                 low == "androidmanifest.xml" -> manifestPaths
                 low.endsWith(".xml") && "/res/navigation" in "/$dir" -> navXmlPaths
+                low.endsWith(".xml") && "/res/menu" in "/$dir" -> menuXmlPaths
                 low.endsWith(".versions.toml") -> tomlPaths
                 low.endsWith(".json") && low.dropLast(5).isNotEmpty() && low.dropLast(5).all { it.isDigit() } -> jsonPaths
                 else -> null

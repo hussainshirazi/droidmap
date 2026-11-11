@@ -99,12 +99,38 @@ class NavScan(private val p: Project, private val g: Graph) {
             for (call in s.file.collectDescendantsOfType<KtCallExpression> { it.calleeName() in DEST_CALLS }) destination(s, call)
         }
         xmlGraphs()
+        menuItems()
         for (s in files()) {
             navigateCalls(s)
             starts(s)
         }
         helperCalls()
         routeReferences()
+        resourceIdUses()
+    }
+
+    /** XML destinations that a menu item opens by its id (bottom navigation or a drawer set up with setupWithNavController). */
+    private fun menuItems() {
+        if (xmlIds.isEmpty()) return
+        for (rel in p.menuXmlPaths) {
+            val items = readXml(p, g, rel, "menu_xml")?.getElementsByTagName("item") ?: continue
+            for (i in 0 until items.length) {
+                val key = (items.item(i) as Element).attr(ANDROID_NS, "id")?.substringAfter('/') ?: continue
+                xmlIds[key]?.let { g.nodes.getValue(it).attrs["menu_item"] = true }
+            }
+        }
+    }
+
+    /** R.id.x in app code reaches an XML destination in ways other than navigate(), such as AppBarConfiguration(setOf(R.id.x)). */
+    private fun resourceIdUses() {
+        if (xmlIds.isEmpty()) return
+        val counts = HashMap<String, Int>()
+        for (s in files()) for (e in s.file.collectDescendantsOfType<KtDotQualifiedExpression>()) {
+            val key = (e.selectorExpression as? KtNameReferenceExpression)?.getReferencedName() ?: continue
+            val r = e.receiverExpression.text.filterNot { it.isWhitespace() }
+            if (r == "R.id" || r.endsWith(".R.id")) counts.merge(key, 1, Int::plus)
+        }
+        for ((key, nid) in xmlIds) counts[key]?.let { g.nodes.getValue(nid).attrs["references"] = it }
     }
 
     private fun fnNode(s: Source, at: PsiElement): String? {
@@ -118,15 +144,15 @@ class NavScan(private val p: Project, private val g: Graph) {
         val typeArg = call.typeArguments.firstOrNull()?.typeReference?.let { TypeRef.of(it) }
         if (name == "entry" && typeArg == null) return
         val nid: String
+        val common = mapOf("api" to api, "registered" to true, "graph" to flag(name == "navigation"), "dialog" to flag(name == "dialog"),
+            "deep_link" to flag(call.valueArguments.arg("deepLinks") != null))
         if (typeArg != null) {
             val d = p.index.resolveType(typeArg.name, s, call)
             val fq = d?.fq() ?: typeArg.name
             val ds = d?.let { p.index.sourceOf(it) }
             nid = destId(fq)
             g.addNode(nid, "nav_destination", fq.substringAfterLast('.'), ds?.path ?: s.path, ds?.line(d) ?: s.line(call),
-                ds?.module ?: s.module, mapOf("route" to fq, "style" to "type", "api" to api, "registered" to true,
-                    "graph" to (if (name == "navigation") true else null), "dialog" to (if (name == "dialog") true else null),
-                    "resolved" to (if (d != null) true else null)))
+                ds?.module ?: s.module, mapOf("route" to fq, "style" to "type", "resolved" to flag(d != null)) + common)
             typeDests[fq] = nid
             if (d != null && ds != null) nodeForClass(g, d, ds, "nav_route")
         } else {
@@ -148,9 +174,7 @@ class NavScan(private val p: Project, private val g: Graph) {
                 else -> null
             }
             g.addNode(nid, "nav_destination", display(v), s.path, s.line(call), s.module,
-                mapOf("route" to display(v), "style" to "string", "api" to api, "registered" to true,
-                    "graph" to (if (name == "navigation") true else null), "dialog" to (if (name == "dialog") true else null),
-                    "route_constant" to constant))
+                mapOf("route" to display(v), "style" to "string", "route_constant" to constant) + common)
             stringDests[v] = nid
         }
         fnNode(s, call)?.let { g.addEdge(it, nid, "registers", s.path, s.line(call)) }
@@ -203,8 +227,8 @@ class NavScan(private val p: Project, private val g: Graph) {
             val name = el.attr(ANDROID_NS, "name")
             g.addNode(nid, "nav_destination", "@id/$key", rel, null, module,
                 mapOf("route" to "@id/$key", "style" to "xml", "api" to "xml", "registered" to true,
-                    "graph" to (if (el.localName == "navigation") true else null),
-                    "dialog" to (if (el.localName == "dialog") true else null), "class_name" to name))
+                    "graph" to flag(el.localName == "navigation"), "dialog" to flag(el.localName == "dialog"),
+                    "deep_link" to flag(el.childElements().any { it.localName == "deepLink" }), "class_name" to name))
             xmlIds[key] = nid
             if (name != null && name in p.index.types) g.addEdge(nid, classId(name), "shows", rel)
         }
