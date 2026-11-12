@@ -3,6 +3,8 @@
 ## 0.2.0 (2026-11-12)
 
 - `diff`: what a change touches. It maps the changed lines (since `--base`, by default the uncommitted changes) onto the innermost declarations around them and lists what depends on those: screens, destinations, ViewModels, Room, bindings, modules and tests, with the findings in the changed files. The GitHub Action posts it on each pull request and keeps one comment updated; the MCP server has `droidmap_diff`.
+- `diff --format tasks` (or `modules`): the test tasks of the modules a change can break, for running only those in CI, without running Gradle.
+- New rules: `hilt-app-not-registered` (`@AndroidEntryPoint` classes, but the manifest's Application is not the `@HiltAndroidApp` one: a crash when they open), `workmanager-setup` (a `@HiltWorker` without `HiltWorkerFactory`, or a `Configuration.Provider` the default initializer bypasses) and `nav-deeplink-not-in-manifest` (a deep link no intent filter accepts).
 - Java: Java sources are read through the same model as Kotlin, so Room (entities, DAOs, migrations, migration tests, schema columns), Hilt, `navigate(R.id.x)` and `new ViewModelProvider(this).get(X.class)` work in Java code.
 - Koin: DSL definitions (`single`, `factory`, `viewModel`, `singleOf(::X)`, `bind`), Koin Annotations (with JSR-330), `get()`/`inject()`/`koinInject()` uses, and the `koin-missing-definition` rule.
 - Kotlin Multiplatform: dependencies in `commonTest`-style source sets are test dependencies; an `expect` class and its `actual`s are one type.

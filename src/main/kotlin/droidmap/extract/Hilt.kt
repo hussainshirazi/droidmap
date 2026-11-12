@@ -79,7 +79,8 @@ class HiltScan(private val code: Code, private val g: Graph) {
             "scope" to scopeOf(t.anns),
             "assisted" to flag(ctor?.anns?.has("AssistedInject") == true),
             "assisted_factory" to flag(t.anns.has("AssistedFactory")),
-            "android_entry_point" to flag(entryPoint)))
+            "android_entry_point" to flag(entryPoint),
+            "hilt_app" to flag(t.anns.has("HiltAndroidApp"))))
         if (t.anns.has("Module")) {
             val comps = t.anns.filter { it.name == "InstallIn" || it.name == "TestInstallIn" }
                 .flatMap { a -> COMPONENT.findAll(a.text ?: "").map { it.groupValues[1] } }

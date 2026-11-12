@@ -5,12 +5,15 @@ import droidmap.Call
 import droidmap.Code
 import droidmap.Fn
 import droidmap.Graph
+import droidmap.KotlinReader
 import droidmap.Project
 import droidmap.Source
 import droidmap.WILD
 import droidmap.arg
 import org.jetbrains.kotlin.com.intellij.psi.PsiElement
 import org.jetbrains.kotlin.com.intellij.psi.PsiReferenceExpression
+import org.jetbrains.kotlin.com.intellij.psi.util.PsiTreeUtil
+import org.jetbrains.kotlin.psi.KtBinaryExpression
 import org.jetbrains.kotlin.psi.KtCallExpression
 import org.jetbrains.kotlin.psi.KtClassLiteralExpression
 import org.jetbrains.kotlin.psi.KtDotQualifiedExpression
@@ -52,6 +55,9 @@ fun routeMatches(dest: String, nav: String): Boolean {
 }
 
 fun display(route: String) = route.replace(WILD, '*')
+
+/** The resource name of a navigation graph file: nav_graph for res/navigation/nav_graph.xml. */
+fun navGraphName(rel: String) = rel.substringAfterLast('/').removeSuffix(".xml")
 
 /** Parses an XML file, or records it as unresolved and returns null. */
 fun readXml(p: Project, g: Graph, rel: String, kind: String): Element? = try {
@@ -138,8 +144,9 @@ class NavScan(private val p: Project, private val code: Code, private val g: Gra
         val typeArg = call.typeArgs.firstOrNull()
         if (name == "entry" && typeArg == null) return
         val nid: String
+        val deepLinks = call.args.arg("deepLinks")
         val common = mapOf("api" to api, "registered" to true, "graph" to flag(name == "navigation"), "dialog" to flag(name == "dialog"),
-            "deep_link" to flag(call.args.arg("deepLinks") != null))
+            "deep_link" to flag(deepLinks != null), "deep_link_uris" to deepLinkUris(deepLinks?.expr).ifEmpty { null })
         if (typeArg != null) {
             val d = index.resolveType(typeArg.name, s, call.psi)
             val fq = d?.fq ?: typeArg.name
@@ -173,6 +180,20 @@ class NavScan(private val p: Project, private val code: Code, private val g: Gra
         fnNode(call.fn)?.let { g.addEdge(it, nid, "registers", s.path, call.line) }
         if (name == "navigation") pendingStarts.add(nid to call)
         call.lambda?.let { screen(s, it, nid) }
+    }
+
+    /** The URI of each `navDeepLink { uriPattern = ... }` or `navDeepLink<Route>(basePath = ...)` under [el], when it is a constant. */
+    private fun deepLinkUris(el: PsiElement?): List<String> {
+        if (el == null) return emptyList()
+        val out = ArrayList<String>()
+        for (c in PsiTreeUtil.findChildrenOfType(el, KtCallExpression::class.java)) {
+            if ((c.calleeExpression as? KtNameReferenceExpression)?.getReferencedName() != "navDeepLink") continue
+            val exprs = PsiTreeUtil.findChildrenOfType(c, KtBinaryExpression::class.java)
+                .filter { it.operationReference.text == "=" && it.left?.text == "uriPattern" }.map { it.right } +
+                listOfNotNull(KotlinReader.args(c.valueArgumentList).arg("basePath", 0)?.expr)
+            for (e in exprs) (code.eval.eval(e) as? String)?.let { out.add(it) }
+        }
+        return out
     }
 
     /** The screen a destination shows: the first project composable its content lambda calls. */
@@ -212,6 +233,9 @@ class NavScan(private val p: Project, private val code: Code, private val g: Gra
     }
 
     private fun xmlElement(el: Element, rel: String, module: String?, actions: MutableList<XmlLink>, starts: MutableList<XmlLink>) {
+        if (el.localName == "include") el.attr(APP_NS, "graph")?.let {
+            g.addMeta("nav_includes", mapOf("from" to navGraphName(rel), "graph" to it.substringAfter('/')))
+        }
         val raw = el.attr(ANDROID_NS, "id")?.takeIf { el.localName !in NOT_DESTINATIONS }
         var nid: String? = null
         if (raw != null) {
@@ -221,7 +245,8 @@ class NavScan(private val p: Project, private val code: Code, private val g: Gra
             g.addNode(nid, "nav_destination", "@id/$key", rel, null, module,
                 mapOf("route" to "@id/$key", "style" to "xml", "api" to "xml", "registered" to true,
                     "graph" to flag(el.localName == "navigation"), "dialog" to flag(el.localName == "dialog"),
-                    "deep_link" to flag(el.childElements().any { it.localName == "deepLink" }), "class_name" to name))
+                    "deep_link" to flag(el.childElements().any { it.localName == "deepLink" }), "class_name" to name,
+                    "deep_link_uris" to el.childElements().filter { it.localName == "deepLink" }.mapNotNull { it.attr(APP_NS, "uri") }.ifEmpty { null }))
             xmlIds[key] = nid
             if (name != null && name in index.types) g.addEdge(nid, classId(name), "shows", rel)
         }

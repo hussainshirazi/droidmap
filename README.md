@@ -102,6 +102,22 @@ Findings show up as code scanning alerts, as notes on the changed lines and in t
 | `base` | `auto` | the git ref to compare with: `auto` is a pull request's base branch, `none` turns it off; another ref must be fetched (for example with `fetch-depth: 0`) |
 | `version` | the pinned release | a droidmap release such as `0.2.0` |
 
+### Run only the tests a change can break
+
+`droidmap diff --format tasks` lists the test task of each module a change can break: the modules with a changed file and every module that depends on them (a module that uses them only in its tests gets its tests run, nothing more). A change to the build setup (settings, the root build file, `gradle/`, `build-logic`) lists every module. It reads only the Gradle files, so it takes a moment, without running Gradle:
+
+```yaml
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # the base branch, to compare with
+      - run: curl -fsSL https://raw.githubusercontent.com/hussainshirazi/droidmap/main/install.sh | sh
+      - run: |
+          tasks=$(~/.local/bin/droidmap diff --base origin/${{ github.base_ref }} --format tasks --task testDebugUnitTest)
+          if [ -n "$tasks" ]; then ./gradlew $tasks; else echo "No module affected"; fi
+```
+
+`--format modules` prints the module paths instead, one per line.
+
 ## With an AI agent (MCP)
 
 `droidmap mcp` is a [Model Context Protocol](https://modelcontextprotocol.io) server over stdio. It rebuilds the graph when a file changes (parsing only the changed files), so its answers follow the code as the agent edits it.
@@ -146,7 +162,7 @@ Kotlin and Java are read with the Kotlin compiler's own parser (the one detekt a
 droidmap init   [path]                               # write the GitHub workflow and MCP config (never overwrites)
 droidmap check  [path] [--format text|json|sarif] [--fail-on error|warning|info|never] [--sarif FILE] [--base REF]
 droidmap impact <node> [path] [--depth N] [--json]   # what depends on a node
-droidmap diff   [path] [--base REF] [--depth N] [--format text|markdown|json]   # what a change touches
+droidmap diff   [path] [--base REF] [--depth N] [--format text|markdown|json|modules|tasks] [--task NAME]   # what a change touches
 droidmap show   <node> [path] [--json]               # a node, its dependencies and its users
 droidmap find   <text> [path] [--limit N] [--json]   # search nodes
 droidmap report [path] [-o FILE]                     # the Markdown report, with Mermaid diagrams
@@ -179,8 +195,11 @@ Exit codes: 0 when done, 1 when `check` finds something at `--fail-on` or above 
 | `room-insert-replace` | off | `@Insert(onConflict = REPLACE)`, which deletes and re-inserts rows |
 | `nav-unknown-target` | error | `navigate()` to a route or key no destination registers |
 | `nav-unreachable` | warning | a destination nothing navigates to, starts at or refers to, and that no deep link or menu item opens |
+| `nav-deeplink-not-in-manifest` | warning | a deep link (`navDeepLink`, `<deepLink>`) whose scheme and host no activity's intent filter accepts, so the link does not open the app |
 | `hilt-missing-binding` | warning | an injected project type with no `@Inject` constructor, `@Provides` or `@Binds` |
 | `hilt-duplicate-binding` | error | the same type and qualifier bound twice in one source set |
+| `hilt-app-not-registered` | error | `@AndroidEntryPoint` classes, but the manifest's `<application android:name>` is not the `@HiltAndroidApp` class (or there is none): they crash when they open |
+| `workmanager-setup` | warning | a `@HiltWorker` that nothing gives `HiltWorkerFactory` to, or a `Configuration.Provider` that WorkManager never asks because its default initializer is still in the manifest |
 | `koin-missing-definition` | warning | a type Koin is asked for (`get()`, `inject()`, `koinInject()`) that no Koin definition provides: `NoDefinitionFoundException` at runtime |
 | `gradle-unknown-project` | error | a project dependency on a module settings does not include |
 | `gradle-forbidden-dependency` | error | a dependency your `[[gradle.forbid]]` rules ban |

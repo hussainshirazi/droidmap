@@ -3,6 +3,8 @@ package droidmap.extract
 import droidmap.Code
 import droidmap.Graph
 import droidmap.Project
+import droidmap.Type
+import droidmap.isTestSet
 import droidmap.sourceSetOf
 import org.w3c.dom.Element
 import java.util.TreeMap
@@ -43,13 +45,18 @@ class ManifestScan(private val p: Project, private val code: Code, private val g
             val app = root.childElements().firstOrNull { it.localName == "application" } ?: continue
             app.attr(ANDROID_NS, "name")?.let { n ->
                 val fq = qualify(n, pkg)
-                g.addNode(classId(fq), "component", fq.substringAfterLast('.'), module = module, attrs = mapOf("component" to "application"))
+                val decl = code.index.types[fq]
+                g.addNode(classId(fq), "component", fq.substringAfterLast('.'), decl?.src?.path, decl?.line, module,
+                    mapOf("component" to "application", "supertypes" to decl?.let { ancestors(it) }?.ifEmpty { null }))
                 g.addEdge(mid, classId(fq), "declares", rel, null, mapOf("source_set" to ss, "type" to "application"))
             }
+            val appCode = !isTestSet(ss)
             for (el in app.childElements()) {
                 if (el.localName !in COMPONENTS) continue
                 val name = el.attr(ANDROID_NS, "name") ?: continue
+                if (appCode && el.localName == "provider") workInitializer(el, name)
                 if (el.attr(TOOLS_NS, "node") == "remove") continue
+                if (appCode && el.localName.startsWith("activity")) links(el, rel)
                 val fq = qualify(name, pkg)
                 val actions = el.childElements().filter { it.localName == "intent-filter" }
                     .flatMap { f -> f.childElements().filter { it.localName == "action" }.mapNotNull { it.attr(ANDROID_NS, "name") } }
@@ -131,6 +138,49 @@ class ManifestScan(private val p: Project, private val code: Code, private val g
         return p.mergerReports.firstOrNull {
             it.startsWith(logs) &&
                 it.substringAfterLast('/').removePrefix("manifest-merger-").removeSuffix("-report.txt").replace("-", "").equals(variant, ignoreCase = true)
+        }
+    }
+
+    /** The project superclasses and interfaces of [t], nearest first (a subclass of the @HiltAndroidApp class works too). */
+    private fun ancestors(t: Type): List<String> {
+        val out = ArrayList<String>()
+        var level = listOf(t)
+        repeat(10) {
+            level = level.flatMap { x -> x.supers.mapNotNull { code.index.resolveType(it.type.name, x.src, x.psi) } }.filter { it.fq !in out }
+            if (level.isEmpty()) return out
+            level.forEach { out.add(it.fq) }
+        }
+        return out
+    }
+
+    /**
+     * WorkManager starts itself through androidx.startup unless the manifest removes its initializer; only then does
+     * it ask the Application (Configuration.Provider) for its configuration, such as Hilt's worker factory.
+     */
+    private fun workInitializer(provider: Element, name: String) {
+        val removes = provider.attr(TOOLS_NS, "node") == "remove"
+        val removed = when (name) {
+            "androidx.work.impl.WorkManagerInitializer" -> removes
+            "androidx.startup.InitializationProvider" -> removes || provider.childElements().any {
+                it.localName == "meta-data" && it.attr(ANDROID_NS, "name") == "androidx.work.WorkManagerInitializer" && it.attr(TOOLS_NS, "node") == "remove"
+            }
+            else -> false
+        }
+        if (removed) g.meta["work_initializer_removed"] = true
+    }
+
+    /** The URLs an activity opens (an intent filter's schemes and hosts) and the navigation graphs whose deep links it takes (`<nav-graph>`). */
+    private fun links(activity: Element, rel: String) {
+        for (child in activity.childElements()) {
+            when (child.localName) {
+                "nav-graph" -> child.attr(ANDROID_NS, "value")?.let { g.addMeta("manifest_nav_graphs", mapOf("graph" to it.substringAfter('/'), "file" to rel)) }
+                "intent-filter" -> {
+                    val data = child.childElements().filter { it.localName == "data" }
+                    val schemes = data.mapNotNull { it.attr(ANDROID_NS, "scheme") }.distinct()
+                    if (schemes.isEmpty()) continue
+                    g.addMeta("link_filters", linkedMapOf("schemes" to schemes, "hosts" to data.mapNotNull { it.attr(ANDROID_NS, "host") }.distinct(), "file" to rel))
+                }
+            }
         }
     }
 

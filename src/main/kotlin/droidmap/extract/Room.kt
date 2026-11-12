@@ -66,9 +66,7 @@ class RoomScan(private val p: Project, private val code: Code, private val g: Gr
             manualMigrations(s)
             for (call in s.calls) {
                 if (call.name !in FALLBACKS) continue
-                @Suppress("UNCHECKED_CAST")
-                val list = g.meta.getOrPut("room_destructive_fallback") { ArrayList<Map<String, Any?>>() } as MutableList<Map<String, Any?>>
-                list.add(linkedMapOf("file" to s.path, "line" to call.line, "call" to call.name, "module" to s.module))
+                g.addMeta("room_destructive_fallback", linkedMapOf("file" to s.path, "line" to call.line, "call" to call.name, "module" to s.module))
             }
         }
         countReferences()

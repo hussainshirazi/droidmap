@@ -114,6 +114,12 @@ class Graph {
         inIdx = null; outIdx = null
     }
 
+    /** Adds [item] to the list meta[[key]]: facts that are not nodes or edges, such as one call a rule looks at. */
+    fun addMeta(key: String, item: Map<String, Any?>) {
+        @Suppress("UNCHECKED_CAST")
+        (meta.getOrPut(key) { ArrayList<Map<String, Any?>>() } as MutableList<Map<String, Any?>>).add(item)
+    }
+
     fun addUnresolved(kind: String, text: String, file: String?, line: Int?, reason: String) {
         unresolved.add(Unresolved(kind, text, file, line, reason))
     }

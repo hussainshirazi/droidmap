@@ -7,6 +7,7 @@ import droidmap.extract.ManifestScan
 import droidmap.extract.NavScan
 import droidmap.extract.RoomScan
 import droidmap.extract.ViewModelUses
+import droidmap.extract.WorkScan
 import java.nio.file.Path
 
 /** A graph with the project and the parsed code it was built from. */
@@ -25,6 +26,7 @@ fun buildGraph(p: Project, base: String? = null, previous: Code? = null): Built 
     NavScan(p, code, g).run()
     HiltScan(code, g).run()
     KoinScan(code, g).run()
+    WorkScan(code, g).run()
     ViewModelUses(code, g).run() // after the DI scans, which mark the ViewModels
     ManifestScan(p, code, g).run()
     g.meta["tool"] = "droidmap"

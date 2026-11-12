@@ -51,6 +51,33 @@ fun parseDiff(diff: String): Pair<List<FileChange>, List<String>> {
     return ranges.map { (path, r) -> FileChange(path, r, path in whole) } to deleted
 }
 
+/** Files whose change can affect every module: the build setup rather than one module's code. */
+private val BUILD_SETUP = Regex("""^(settings\.gradle(\.kts)?|build\.gradle(\.kts)?|gradle\.properties|gradle/.+|buildSrc/.+|build-logic/.+)$""")
+
+/**
+ * The modules whose tests a change can break, sorted: each module with a changed (or deleted) file, and every
+ * module that depends on one of them, test dependencies included. A change to the build setup (settings, the
+ * root build file, the version catalog, convention plugins) affects every module. Only [g]'s modules are needed.
+ */
+fun affectedModules(g: Graph, p: Project, changes: Changes): List<String> {
+    // The root project counts only when it is a module with code (it applies a plugin), not a folder of settings and docs.
+    val isCode = { m: String -> m != ":" || g.nodes[moduleId(":")]?.attrs?.strings("plugins")?.isNotEmpty() == true }
+    val all = g.byKind("module").filter { !it.attrs.bool("missing") }.map { it.label }.filter(isCode)
+    val paths = changes.files.map { it.path } + changes.deleted
+    if (paths.any { BUILD_SETUP.matches(it) || p.moduleOf(it)?.startsWith("[") == true }) return all.sorted()
+    // A module that uses a changed one only in its tests has its tests affected, but its own code is unchanged,
+    // so what depends on it is not.
+    val reached = HashMap<String, Boolean>() // module id -> whether its code is affected
+    val todo = ArrayDeque(paths.mapNotNull { p.moduleOf(it) }.filter(isCode).distinct().map { moduleId(it) to true })
+    while (todo.isNotEmpty()) {
+        val (m, code) = todo.removeFirst()
+        if (m !in g.nodes || reached[m] == true || (reached[m] == false && !code)) continue
+        reached[m] = code
+        if (code) g.inEdges(m).filter { it.kind == "depends_on" }.forEach { todo.addLast(it.source to !it.attrs.bool("test")) }
+    }
+    return reached.keys.map { g.label(it) }.filter { it in all }.sorted()
+}
+
 /** What a change touches: the nodes whose code changed, and everything that depends on them. */
 class DiffReport(
     val base: String, val files: List<String>, val read: Int, val deleted: List<String>,

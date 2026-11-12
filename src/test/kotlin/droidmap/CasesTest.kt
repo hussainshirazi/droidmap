@@ -352,6 +352,40 @@ class CasesTest {
     }
 
     @Test
+    fun affectedModulesForCi() {
+        val root = write(
+            "settings.gradle.kts" to """include(":app", ":core:data", ":core:ui", ":feature:home")""",
+            "build.gradle.kts" to """plugins { id("com.android.application") apply false }""",
+            "gradle/libs.versions.toml" to "[versions]",
+            "app/build.gradle.kts" to """dependencies { implementation(project(":feature:home")) }""",
+            "feature/home/build.gradle.kts" to """dependencies { implementation(project(":core:data")); testImplementation(project(":core:ui")) }""",
+            "core/data/build.gradle.kts" to "",
+            "core/ui/build.gradle.kts" to "",
+            "core/data/src/main/kotlin/Repo.kt" to "class Repo",
+            "core/ui/src/main/res/values/strings.xml" to "<resources/>",
+            "README.md" to "x",
+        )
+        commitAll(root)
+        fun run(vararg args: String): List<String> {
+            val buf = ByteArrayOutputStream()
+            assertEquals(0, runMain(listOf("diff", root.toString()) + args, PrintStream(buf), PrintStream(ByteArrayOutputStream())))
+            return buf.toString(Charsets.UTF_8).lines().filter { it.isNotBlank() }
+        }
+        fun change(rel: String) = Files.writeString(root.resolve(rel), Files.readString(root.resolve(rel)) + "\n")
+
+        change("README.md")
+        assertEquals(emptyList(), run("--format", "modules"), "docs touch no module")
+        change("core/data/src/main/kotlin/Repo.kt")
+        assertEquals(listOf(":app", ":core:data", ":feature:home"), run("--format", "modules"))
+        git(root, "checkout", "-q", "--", ".")
+        change("core/ui/src/main/res/values/strings.xml")
+        assertEquals(listOf(":core:ui:testDebugUnitTest", ":feature:home:testDebugUnitTest"), run("--format", "tasks", "--task", "testDebugUnitTest"),
+            "a resource counts, and so does a test dependency")
+        change("gradle/libs.versions.toml")
+        assertEquals(listOf(":app", ":core:data", ":core:ui", ":feature:home"), run("--format", "modules"), "the version catalog affects every module")
+    }
+
+    @Test
     fun daoWritesThroughAGenericBaseDao() {
         val (g, _) = build(*app, "app/src/main/kotlin/com/x/db/Daos.kt" to """
             package com.x.db
@@ -414,7 +448,130 @@ class CasesTest {
                 <deepLink android:id="@+id/link" app:uri="example://linked"/>
               </fragment>
             </navigation>""")
-        assertEquals(emptyList(), f.map { it.message })
+        assertEquals(emptyList(), f.filter { it.rule != "nav-deeplink-not-in-manifest" }.map { it.message })
+    }
+
+    private fun manifest(application: String) = """
+        <manifest xmlns:android="http://schemas.android.com/apk/res/android" xmlns:tools="http://schemas.android.com/tools">
+          $application
+        </manifest>"""
+
+    private val hiltApp = arrayOf(
+        "settings.gradle.kts" to """include(":app")""",
+        "app/build.gradle.kts" to """
+            plugins { id("com.android.application") }
+            android { namespace = "com.x" }""",
+        "app/src/main/kotlin/com/x/App.kt" to """
+            package com.x
+            import dagger.hilt.android.AndroidEntryPoint
+            import dagger.hilt.android.HiltAndroidApp
+
+            @HiltAndroidApp open class App : Application()
+            class DebugApp : App()
+            @AndroidEntryPoint class MainActivity : ComponentActivity()""",
+    )
+
+    @Test
+    fun theHiltApplicationMustBeTheOneTheManifestNames() {
+        fun findings(application: String) = build(*hiltApp, "app/src/main/AndroidManifest.xml" to manifest(application)).second
+            .filter { it.rule == "hilt-app-not-registered" }.map { it.message }
+        assertEquals(emptyList(), findings("""<application android:name=".App"/>"""))
+        assertEquals(emptyList(), findings("""<application android:name="com.x.DebugApp"/>"""), "a subclass works too")
+        val wrong = findings("""<application android:name=".OtherApp"/>""")
+        assertTrue(wrong.single().startsWith("App is the @HiltAndroidApp Application, but no AndroidManifest.xml names it") &&
+            "(it names OtherApp), so MainActivity (an @AndroidEntryPoint) fails" in wrong.single(), wrong.toString())
+        assertEquals(1, findings("""<application android:label="x"/>""").size, "no android:name at all")
+    }
+
+    @Test
+    fun entryPointsWithoutAHiltApplication() {
+        val (_, f) = build(*hiltApp.map { (k, v) -> k to v.replace("@HiltAndroidApp ", "") }.toTypedArray())
+        assertTrue(f.single { it.rule == "hilt-app-not-registered" }.message.startsWith("No Application class is annotated @HiltAndroidApp"))
+    }
+
+    private val worker = "app/src/main/kotlin/com/x/SyncWorker.kt" to """
+        package com.x
+        import androidx.hilt.work.HiltWorker
+        import dagger.assisted.Assisted
+        import dagger.assisted.AssistedInject
+
+        @HiltWorker class SyncWorker @AssistedInject constructor(@Assisted context: Context, @Assisted params: WorkerParameters) :
+            CoroutineWorker(context, params)"""
+
+    private val configProvider = "app/src/main/kotlin/com/x/App.kt" to """
+        package com.x
+        import androidx.hilt.work.HiltWorkerFactory
+        import androidx.work.Configuration
+        import dagger.hilt.android.HiltAndroidApp
+        import javax.inject.Inject
+
+        @HiltAndroidApp class App : Application(), Configuration.Provider {
+            @Inject lateinit var workerFactory: HiltWorkerFactory
+            override val workManagerConfiguration get() = Configuration.Builder().setWorkerFactory(workerFactory).build()
+        }"""
+
+    @Test
+    fun hiltWorkersNeedHiltWorkerFactory() {
+        val (_, f) = build(*app, worker)
+        assertTrue(f.single { it.rule == "workmanager-setup" }.message.startsWith("SyncWorker is a @HiltWorker, but nothing in the app uses HiltWorkerFactory"))
+    }
+
+    @Test
+    fun configurationProviderNeedsTheDefaultInitializerRemoved() {
+        val removed = """
+            <application android:name=".App">
+              <provider android:name="androidx.startup.InitializationProvider" android:authorities="x" tools:node="merge">
+                <meta-data android:name="androidx.work.WorkManagerInitializer" android:value="androidx.startup" tools:node="remove"/>
+              </provider>
+            </application>"""
+        fun findings(application: String) = build(*app, worker, configProvider, "app/src/main/AndroidManifest.xml" to manifest(application)).second
+            .filter { it.rule == "workmanager-setup" }.map { it.message }
+        assertEquals(emptyList(), findings(removed))
+        val kept = findings("""<application android:name=".App"/>""")
+        assertTrue(kept.single().startsWith("App implements Configuration.Provider, but the manifest keeps WorkManager's default initializer"), kept.toString())
+    }
+
+    @Test
+    fun deepLinksNeedAnIntentFilter() {
+        val activity = """
+            <application>
+              <activity android:name=".MainActivity">
+                <intent-filter>
+                  <action android:name="android.intent.action.VIEW"/>
+                  <data android:scheme="https"/>
+                  <data android:host="*.example.com"/>
+                </intent-filter>
+                <nav-graph android:value="@navigation/main"/>
+              </activity>
+            </application>"""
+        val (_, f) = build(*app,
+            "app/src/main/AndroidManifest.xml" to manifest(activity),
+            "app/src/main/kotlin/com/x/Nav.kt" to """
+                package com.x
+                import androidx.navigation.compose.composable
+                import androidx.navigation.navDeepLink
+                const val BASE = "https://www.example.com"
+                fun AppNav() {
+                    NavHost(nav, "item/{id}") {
+                        composable("item/{id}", deepLinks = listOf(navDeepLink { uriPattern = "${'$'}BASE/item/{id}" })) { }
+                        composable("open", deepLinks = listOf(navDeepLink { uriPattern = "app://open" })) { }
+                    }
+                }""",
+            "app/src/main/res/navigation/main.xml" to """
+                <navigation $ns app:startDestination="@id/home">
+                  <include app:graph="@navigation/more"/>
+                  <fragment android:id="@+id/home" android:name="com.x.Home"><deepLink app:uri="other://home"/></fragment>
+                </navigation>""",
+            "app/src/main/res/navigation/more.xml" to """
+                <navigation $ns android:id="@+id/more" app:startDestination="@id/detail">
+                  <fragment android:id="@+id/detail" android:name="com.x.Detail"><deepLink app:uri="other://detail"/></fragment>
+                </navigation>""",
+            "app/src/main/res/navigation/loose.xml" to """
+                <navigation $ns app:startDestination="@id/loose">
+                  <fragment android:id="@+id/loose" android:name="com.x.Loose"><deepLink app:uri="loose://x"/></fragment>
+                </navigation>""")
+        assertEquals(listOf("app://open", "loose://x"), f.filter { it.rule == "nav-deeplink-not-in-manifest" }
+            .map { it.message.substringAfter("has the deep link ").substringBefore(",") }.sorted())
     }
 
     @Test
@@ -553,9 +710,13 @@ allowed_permissions = ["android.permission.INTERNET"]""",
             package com.x;
             import androidx.navigation.fragment.NavHostFragment;
             import dagger.hilt.android.AndroidEntryPoint;
+            import dagger.hilt.android.HiltAndroidApp;
             import javax.inject.Inject;
 
             class Analytics { }
+
+            @HiltAndroidApp
+            class App extends Application { }
 
             @AndroidEntryPoint
             public class MainActivity extends AppCompatActivity {
@@ -578,7 +739,7 @@ allowed_permissions = ["android.permission.INTERNET"]""",
             </navigation>""",
         "app/src/main/AndroidManifest.xml" to """
             <manifest xmlns:android="http://schemas.android.com/apk/res/android" package="com.x">
-              <application><activity android:name=".MainActivity"/></application>
+              <application android:name=".App"><activity android:name=".MainActivity"/></application>
             </manifest>""")
 
     @Test

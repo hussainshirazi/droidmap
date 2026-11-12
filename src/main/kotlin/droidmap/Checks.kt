@@ -1,5 +1,7 @@
 package droidmap
 
+import droidmap.extract.navGraphName
+
 /**
  * The rules that run over a built graph. Each finding names its rule, so it can be configured in
  * .droidmap.toml ([rules] rule-id = "error" | "warning" | "info" | "off").
@@ -15,6 +17,9 @@ enum class Rule(val id: String, val severity: String, val description: String) {
     ROOM_INSERT_REPLACE("room-insert-replace", "off", "@Insert/@Upsert with OnConflictStrategy.REPLACE deletes and re-inserts rows"),
     NAV_UNKNOWN_TARGET("nav-unknown-target", "error", "navigate() to a route or key that no destination registers"),
     NAV_UNREACHABLE("nav-unreachable", "warning", "A destination that nothing navigates to, starts at, deep-links to, opens from a menu or references"),
+    NAV_DEEPLINK_NOT_IN_MANIFEST("nav-deeplink-not-in-manifest", "warning", "A navigation deep link whose scheme and host no activity's intent filter accepts, so the link does not open the app"),
+    HILT_APP_NOT_REGISTERED("hilt-app-not-registered", "error", "@AndroidEntryPoint classes without a @HiltAndroidApp Application that the manifest names: a crash when they open"),
+    WORKMANAGER_SETUP("workmanager-setup", "warning", "@HiltWorker classes that nothing gives HiltWorkerFactory to, or a Configuration.Provider that the default WorkManager initializer bypasses"),
     HILT_MISSING_BINDING("hilt-missing-binding", "warning", "An injected project type with no @Inject constructor, @Provides or @Binds"),
     HILT_DUPLICATE_BINDING("hilt-duplicate-binding", "error", "The same type and qualifier is bound twice in one source set"),
     KOIN_MISSING_DEFINITION("koin-missing-definition", "warning", "A type Koin is asked for (get(), inject(), koinInject()) that no Koin definition provides"),
@@ -37,7 +42,7 @@ private fun finding(rule: Rule, message: String, file: String? = null, line: Int
     Finding(rule.id, rule.severity, message, file, line, node)
 
 fun runChecks(g: Graph, config: Config = Config()): List<Finding> {
-    val all = room(g) + nav(g) + di(g) + gradle(g, config) + manifest(g, config)
+    val all = room(g) + nav(g) + deepLinks(g) + di(g) + hiltApp(g) + workManager(g) + gradle(g, config) + manifest(g, config)
     val out = ArrayList<Finding>()
     for (f in all) {
         val sev = config.severities[f.rule] ?: f.severity
@@ -159,6 +164,47 @@ private fun nav(g: Graph): List<Finding> {
     return out
 }
 
+/** (scheme, host) of an absolute URI whose scheme and host are constant, lower case; null otherwise. */
+private fun schemeAndHost(uri: String): Pair<String, String>? {
+    val m = Regex("""^([A-Za-z][A-Za-z0-9+.-]*)://([^/?#]+)""").find(uri) ?: return null
+    val (scheme, host) = m.destructured
+    if ((scheme + host).any { it in "{}$*" || it == WILD }) return null
+    return scheme.lowercase() to host.lowercase()
+}
+
+/** Whether an intent filter's data (its schemes and hosts, any of which may be a placeholder or a *. wildcard) accepts the URL. */
+private fun accepts(filter: Map<String, Any?>, scheme: String, host: String): Boolean {
+    fun any(v: String) = '$' in v
+    val schemes = filter.strings("schemes")
+    val hosts = filter.strings("hosts")
+    if (schemes.none { any(it) || it.equals(scheme, ignoreCase = true) }) return false
+    return hosts.isEmpty() || hosts.any { h -> any(h) || h.equals(host, ignoreCase = true) || (h.startsWith("*") && host.endsWith(h.drop(1).lowercase())) }
+}
+
+private fun deepLinks(g: Graph): List<Finding> {
+    val filters = g.meta.maps("link_filters")
+    // XML graphs the manifest names with <nav-graph> get their intent filters at build time, with the graphs they include.
+    val covered = g.meta.maps("manifest_nav_graphs").mapNotNull { it.str("graph") }.toMutableSet()
+    val includes = g.meta.maps("nav_includes").groupBy({ it.str("from") }, { it.str("graph") })
+    val todo = ArrayDeque(covered.toList())
+    while (todo.isNotEmpty()) for (inc in includes[todo.removeFirst()] ?: emptyList()) if (inc != null && covered.add(inc)) todo.addLast(inc)
+    val out = ArrayList<Finding>()
+    for (n in g.byKind("nav_destination")) {
+        val xmlGraph = n.file?.takeIf { n.attrs.str("api") == "xml" }?.let { navGraphName(it) }
+        if (xmlGraph != null && xmlGraph in covered) continue
+        for (uri in n.attrs.strings("deep_link_uris")) {
+            val (scheme, host) = schemeAndHost(uri) ?: continue
+            if (filters.any { accepts(it, scheme, host) }) continue
+            val fix = "add an <intent-filter> with <data android:scheme=\"$scheme\" android:host=\"$host\" /> to the activity that hosts it" +
+                (if (xmlGraph != null) ", or <nav-graph android:value=\"@navigation/$xmlGraph\" />" else "")
+            out.add(finding(Rule.NAV_DEEPLINK_NOT_IN_MANIFEST,
+                "${n.label} has the deep link $uri, but no activity's intent filter accepts $scheme://$host, so the link opens a browser " +
+                    "or nothing instead of the app (an explicit intent from inside the app still works): $fix", n.file, n.line, n.id))
+        }
+    }
+    return out
+}
+
 // ----- Hilt and Koin -----
 private fun di(g: Graph): List<Finding> {
     val out = ArrayList<Finding>()
@@ -195,6 +241,59 @@ private fun di(g: Graph): List<Finding> {
                 "${key.first}${key.second?.let { " @$it" } ?: ""} is bound more than once: ${c.map { it.label }.sorted().joinToString(", ")}",
                 c[0].file, c[0].line, c[0].id))
         }
+    }
+    return out
+}
+
+private fun appCode(n: Node) = !isTestSet(n.attrs.str("source_set"))
+
+/** Hilt needs its @HiltAndroidApp class (or a subclass) to be the Application the manifest names, or every @AndroidEntryPoint crashes. */
+private fun hiltApp(g: Graph): List<Finding> {
+    val entryPoints = g.nodes.values.filter { it.attrs.bool("android_entry_point") && !it.attrs.bool("hilt_app") && appCode(it) }.sortedBy { it.id }
+    if (entryPoints.isEmpty()) return emptyList()
+    val declared = g.edgesOf("declares").filter { it.attrs.str("type") == "application" && !isTestSet(it.attrs.str("source_set")) }
+        .mapNotNull { g.nodes[it.target] }
+    if (declared.any { '$' in it.label || '{' in it.label }) return emptyList() // a manifest placeholder: cannot tell
+    val apps = g.nodes.values.filter { it.attrs.bool("hilt_app") && appCode(it) }.sortedBy { it.id }
+    val crash = if (entryPoints.size == 1) "${entryPoints[0].label} (an @AndroidEntryPoint) fails with IllegalStateException when Android creates it"
+        else "${entryPoints[0].label} and ${entryPoints.size - 1} other @AndroidEntryPoint classes fail with IllegalStateException when Android creates them"
+    if (apps.isEmpty()) {
+        // Only for an app: a library's entry points get their Application from the app that uses the library.
+        val isApp = declared.isNotEmpty() || g.byKind("module").any { m -> m.attrs.strings("plugins").any { "application" in it } }
+        if (!isApp) return emptyList()
+        return listOf(finding(Rule.HILT_APP_NOT_REGISTERED,
+            "No Application class is annotated @HiltAndroidApp, so $crash: annotate the Application and name it in the manifest's <application android:name>",
+            entryPoints[0].file, entryPoints[0].line, entryPoints[0].id))
+    }
+    return apps.mapNotNull { app ->
+        val fq = app.id.substringAfter("::")
+        if (declared.any { it.id == app.id || fq in it.attrs.strings("supertypes") }) return@mapNotNull null
+        val named = declared.map { it.label }.distinct().sorted()
+        finding(Rule.HILT_APP_NOT_REGISTERED,
+            "${app.label} is the @HiltAndroidApp Application, but no AndroidManifest.xml names it (or a subclass) in <application android:name>" +
+                (if (named.isNotEmpty()) " (it names ${named.joinToString(", ")})" else "") + ", so $crash",
+            app.file, app.line, app.id)
+    }
+}
+
+/** WorkManager makes @HiltWorker classes only through HiltWorkerFactory, and asks the Application for it only once its own initializer is removed. */
+private fun workManager(g: Graph): List<Finding> {
+    val out = ArrayList<Finding>()
+    val workers = g.meta.maps("hilt_workers")
+    if (workers.isNotEmpty() && g.meta["hilt_worker_factory_used"] == false) {
+        val w = workers[0]
+        out.add(finding(Rule.WORKMANAGER_SETUP,
+            "${workers.mapNotNull { it.str("name") }.sorted().joinToString(", ")} ${if (workers.size > 1) "are @HiltWorkers" else "is a @HiltWorker"}, " +
+                "but nothing in the app uses HiltWorkerFactory: WorkManager's default factory cannot call an @AssistedInject constructor, " +
+                "so the work fails (\"Could not instantiate\"). Give WorkManager the factory: the Application implements Configuration.Provider " +
+                "with setWorkerFactory(workerFactory)", w.str("file"), w.int("line")))
+    }
+    if (g.meta["work_initializer_removed"] != true) for (p in g.meta.maps("work_config_providers")) {
+        out.add(finding(Rule.WORKMANAGER_SETUP,
+            "${p.str("name")} implements Configuration.Provider, but the manifest keeps WorkManager's default initializer, which starts " +
+                "WorkManager with the default configuration first, so this one${if (workers.isNotEmpty()) " (and its worker factory)" else ""} " +
+                "is never used: remove androidx.work.WorkManagerInitializer from androidx.startup.InitializationProvider with tools:node=\"remove\"",
+            p.str("file"), p.int("line")))
     }
     return out
 }

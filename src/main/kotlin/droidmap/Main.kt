@@ -1,5 +1,6 @@
 package droidmap
 
+import droidmap.extract.GradleScan
 import java.io.FileDescriptor
 import java.io.FileOutputStream
 import java.io.PrintStream
@@ -23,8 +24,9 @@ private val USAGE = """
       impact <node> [path] [--depth N] [--json]   what depends on a node
       show   <node> [path] [--json]                a node, its dependencies and users
       find   <text> [path] [--limit N] [--json]
-      diff   [path] [--base REF] [--depth N] [--format text|markdown|json]
-                                                   what a change touches (default: uncommitted changes)
+      diff   [path] [--base REF] [--depth N] [--format text|markdown|json|modules|tasks] [--task NAME]
+                                                   what a change touches (default: uncommitted changes); modules and
+                                                   tasks list the modules whose tests it can break, for CI
       report [path] [-o FILE]                      the Markdown report, with module and screen diagrams
       rules                                        list the rules and their default severities
       mcp    [path]                                run as an MCP server over stdio
@@ -215,12 +217,22 @@ class Cli(private val out: PrintStream = System.out, private val err: PrintStrea
     }
 
     private fun diff(rest: List<String>): Int {
-        val a = parseArgs(rest, setOf("--config", "--base", "--depth", "--format"), emptySet())
+        val a = parseArgs(rest, setOf("--config", "--base", "--depth", "--format", "--task"), emptySet())
         val format = a.opt("--format") ?: "text"
-        if (format !in setOf("text", "markdown", "json")) throw UsageError("--format is text, markdown or json")
+        if (format !in setOf("text", "markdown", "json", "modules", "tasks")) throw UsageError("--format is text, markdown, json, modules or tasks")
         val r = root(a.positionals.firstOrNull())
         val cfg = config(r, a)
         val base = base(r, a) ?: "HEAD".also { if (!Git.isCommit(r, it)) throw UsageError("$r is not in a git repository with a commit") }
+        if (format == "modules" || format == "tasks") {
+            // Only the module graph is needed: no source file is parsed.
+            val p = Project(r, cfg)
+            val g = Graph().also { GradleScan(p, it).run() }
+            val task = a.opt("--task") ?: "test"
+            affectedModules(g, p, readChanges(r, base)).forEach { m ->
+                out.println(if (format == "modules") m else "${if (m == ":") "" else m}:$task")
+            }
+            return 0
+        }
         val built = buildGraph(Project(r, cfg))
         val report = diffReport(built.graph, readChanges(r, base), runChecks(built.graph, cfg), built.project.readPaths(),
             a.opt("--depth")?.toIntOrNull() ?: 4)
