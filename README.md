@@ -39,7 +39,7 @@ Homebrew: `brew tap hussainshirazi/droidmap https://github.com/hussainshirazi/dr
 
 Docker, for CI systems other than GitHub Actions (GitLab, Bitbucket, Jenkins, Bitrise): `docker run --rm -v "$PWD":/project ghcr.io/hussainshirazi/droidmap check` (from version 0.2.0).
 
-Gradle (from version 0.3.0), in the root `build.gradle.kts`; then `./gradlew droidmapCheck` fails the build on errors:
+Gradle (from version 0.3.0, once it is on the Gradle Plugin Portal), in the root `build.gradle.kts`; then `./gradlew droidmapCheck` fails the build on errors:
 
 ```kotlin
 plugins { id("io.github.hussainshirazi.droidmap") version "0.3.0" }

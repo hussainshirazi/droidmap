@@ -1,0 +1,42 @@
+name: Publish the Gradle plugin
+
+# Publishes the Gradle plugin of a release made before the Plugin Portal secrets (GRADLE_PUBLISH_KEY,
+# GRADLE_PUBLISH_SECRET) existed. Releases made after that publish it themselves (release.yml).
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "The release tag, such as v0.3.0"
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: The tag is a release tag
+        env:
+          TAG: ${{ inputs.tag }}
+        run: |
+          [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "::error::Not a release tag: $TAG"; exit 1; }
+      - uses: actions/checkout@v4
+        with:
+          ref: refs/tags/${{ inputs.tag }}
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Publish
+        env:
+          TAG: ${{ inputs.tag }}
+          GRADLE_PUBLISH_KEY: ${{ secrets.GRADLE_PUBLISH_KEY }}
+          GRADLE_PUBLISH_SECRET: ${{ secrets.GRADLE_PUBLISH_SECRET }}
+        run: |
+          if [ -z "$GRADLE_PUBLISH_KEY" ] || [ -z "$GRADLE_PUBLISH_SECRET" ]; then
+            echo "::error::Add the GRADLE_PUBLISH_KEY and GRADLE_PUBLISH_SECRET secrets first"; exit 1
+          fi
+          chmod +x gradlew && ./gradlew fatJar
+          ./gradlew -p gradle-plugin test publishPlugins -Pversion="${TAG#v}"
