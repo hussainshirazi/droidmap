@@ -1,6 +1,6 @@
 # Contributing to droidmap
 
-Bug reports, false positives, ideas and pull requests are all welcome.
+Bug reports, false positives, ideas and pull requests are all welcome. Everyone taking part follows the [code of conduct](CODE_OF_CONDUCT.md).
 
 ## Reporting a problem
 
