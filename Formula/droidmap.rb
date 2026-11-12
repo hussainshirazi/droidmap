@@ -4,9 +4,9 @@
 class Droidmap < Formula
   desc "Android-aware project graph, checks and MCP server"
   homepage "https://github.com/hussainshirazi/droidmap"
-  url "https://github.com/hussainshirazi/droidmap/releases/download/v0.2.1/droidmap.jar"
-  version "0.2.1"
-  sha256 "9e208423a17fcc0229cd5a7fc5b735ce7dfd449122659074d20e082f673cbaee"
+  url "https://github.com/hussainshirazi/droidmap/releases/download/v0.3.0/droidmap.jar"
+  version "0.3.0"
+  sha256 "952c9389c59b9251c56a72597fcd7bb45213d76266597aa1b49ca71837fba171"
   license "Apache-2.0"
 
   depends_on "openjdk"
