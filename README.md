@@ -21,6 +21,41 @@ It reads source files only: it never runs Gradle, never compiles your code and n
 
 ![droidmap check and droidmap diff in a terminal](docs/demo.svg)
 
+### On a real app
+
+[Now in Android](https://github.com/android/nowinandroid) (35 modules, Hilt, Room, Navigation 3), on a laptop, in about 1.5 seconds each:
+
+```console
+$ droidmap check
+warning room-migration-untested      core/database/src/main/kotlin/com/google/samples/apps/nowinandroid/core/database/NiaDatabase.kt:66
+        NiaDatabase: 13 of 13 migration steps have no MigrationTestHelper test (1->2, 2->3, 3->4,
+        4->5, 5->6, 6->7, 7->8, 8->9, 9->10, 10->11, 11->12, 12->13, 13->14)
+
+1 warning
+```
+
+After a one-line change to `OfflineFirstTopicsRepository.syncWith` (output shortened):
+
+```console
+$ droidmap diff
+Changed (1): OfflineFirstTopicsRepository (injectable)
+
+Affected (what depends on the changed code):
+
+  Screens: ForYouScreen, InterestsScreen, TopicScreen
+  Navigation destinations: ForYouNavKey, InterestsNavKey, TopicNavKey
+  ViewModels: ForYouViewModel, InterestsViewModel, TopicViewModel
+  Dependency injection: DataModule.bindsTopicRepository, GetFollowableTopicsUseCase, SyncWorker
+  Modules: :app, :app-nia-catalog, :core:data, :core:data-test, :core:domain, ... and 12 more
+
+Tests that cover it (1): OfflineFirstTopicsRepositoryTest
+
+$ droidmap diff --format tests
+:core:data:test --tests com.google.samples.apps.nowinandroid.core.data.repository.OfflineFirstTopicsRepositoryTest
+```
+
+The last line goes straight to `./gradlew` in CI: one test class instead of the whole suite (see [Run only the tests a change can break](#run-only-the-tests-a-change-can-break)).
+
 ## Install
 
 macOS or Linux:
@@ -81,7 +116,7 @@ jobs:
       security-events: write   # findings as code scanning alerts
       pull-requests: write     # the comment that says what the pull request touches
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: hussainshirazi/droidmap@v0
 ```
 
@@ -123,7 +158,7 @@ Findings show up as code scanning alerts, as notes on the changed lines and in t
 `droidmap diff --format tasks` lists the test task of each module a change can break: the modules with a changed file and every module that depends on them (a module that uses them only in its tests gets its tests run, nothing more). A change to the build setup (settings, the root build file, `gradle/`, `build-logic`) lists every module. It reads only the Gradle files, so it takes a moment, without running Gradle:
 
 ```yaml
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0   # the base branch, to compare with
       - run: curl -fsSL https://raw.githubusercontent.com/hussainshirazi/droidmap/main/install.sh | sh
