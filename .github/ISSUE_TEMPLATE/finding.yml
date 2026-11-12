@@ -1,0 +1,37 @@
+name: False positive or missed problem
+description: A rule flagged correct code, or missed a real problem
+labels: [rules]
+body:
+  - type: input
+    id: rule
+    attributes:
+      label: Rule
+      description: The rule id from the finding, e.g. hilt-missing-binding
+    validations:
+      required: true
+  - type: dropdown
+    id: kind
+    attributes:
+      label: Kind
+      options:
+        - False positive (flags correct code)
+        - Missed problem (should have flagged it)
+    validations:
+      required: true
+  - type: textarea
+    id: code
+    attributes:
+      label: Code that shows it
+      description: The smallest snippet or file layout that reproduces it, or a link to a public project and commit
+      render: kotlin
+    validations:
+      required: true
+  - type: textarea
+    id: why
+    attributes:
+      label: Why the finding is wrong (or what should have been found)
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: The output of `droidmap --version`

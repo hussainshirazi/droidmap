@@ -1,0 +1,30 @@
+name: Bug report
+description: droidmap crashed, hung, or printed something wrong
+labels: [bug]
+body:
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: The output of `droidmap --version`
+    validations:
+      required: true
+  - type: input
+    id: command
+    attributes:
+      label: Command
+      description: What you ran, e.g. `droidmap check .` or the GitHub Action, Gradle plugin or MCP tool
+    validations:
+      required: true
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened, and what you expected
+      description: The output or stack trace, and a public project or a small snippet that shows it if you can
+    validations:
+      required: true
+  - type: input
+    id: system
+    attributes:
+      label: System and Java version
+      placeholder: macOS 15, Java 21

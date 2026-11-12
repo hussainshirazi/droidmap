@@ -1,7 +1,9 @@
 # droidmap
 
 [![CI](https://github.com/hussainshirazi/droidmap/actions/workflows/ci.yml/badge.svg)](https://github.com/hussainshirazi/droidmap/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/hussainshirazi/droidmap)](https://github.com/hussainshirazi/droidmap/releases/latest)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
+[![MCP Registry](https://img.shields.io/badge/MCP_Registry-io.github.hussainshirazi%2Fdroidmap-6e56cf)](https://registry.modelcontextprotocol.io/v0/servers?search=io.github.hussainshirazi/droidmap)
 
 **An Android-aware map of your project, for you, your pull requests and your AI coding agent.**
 
@@ -319,15 +321,7 @@ droidmap reads the source and never runs Gradle. That is what makes it take seco
 
 ## Contributing
 
-```sh
-./gradlew test fatJar        # run the tests and build build/libs/droidmap.jar
-```
-
-The code lives in `src/main/kotlin/droidmap`. `KotlinReader` and `JavaReader` read each file into one language-neutral model (`Model.kt`); the extractors in `extract/` (Gradle, Room, Navigation, Hilt, Koin, WorkManager, Manifest) turn the model into the graph; the rules are in `Checks.kt` with a page each in `docs/rules/`, queries in `Query.kt`, `diff` in `Diff.kt`, the report in `Report.kt` and the MCP server in `Mcp.kt`. The tests run every rule against a small synthetic project in `src/test/resources/sample` and small projects written per case (`CasesTest`); a new rule or a fixed false positive should come with a case.
-
-CI also runs droidmap on open-source apps at fixed commits ([realworld/projects.txt](realworld/projects.txt): Now in Android, its Koin port, Google's architecture-components-samples and PeopleInSpace) and fails when their findings change. If a change is right, update `realworld/expected/` with what `realworld/check.sh` prints.
-
-Ideas and bug reports are welcome in the issues. A small snippet that reproduces the problem helps most.
+`./gradlew test fatJar` runs the tests and builds `build/libs/droidmap.jar`. [CONTRIBUTING.md](CONTRIBUTING.md) has where the code lives, what a new rule or fix needs, and the real-project checks in CI. Report a wrong or missed finding with the *False positive or missed problem* issue form; security problems privately, as [SECURITY.md](SECURITY.md) says.
 
 ## License
 
