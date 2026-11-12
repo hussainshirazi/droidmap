@@ -13,6 +13,7 @@ permissions:
   pull-requests: write
   packages: write   # the Docker image on ghcr.io
   id-token: write   # signing in to the MCP Registry as this repository
+  actions: write    # starting CI on the packages branch and the installer tests
 
 jobs:
   release:
@@ -105,3 +106,9 @@ jobs:
             echo "Open the pull request that updates the packages: $link" >> "$GITHUB_STEP_SUMMARY"
             echo "::notice::Open $link to update Homebrew, Scoop, the plugin and server.json"
           fi
+          # Its required checks: a pull request a workflow opens starts no workflow of its own.
+          gh workflow run ci.yml --ref "$branch"
+      - name: Install this release the ways the README describes
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run packaging.yml --ref main

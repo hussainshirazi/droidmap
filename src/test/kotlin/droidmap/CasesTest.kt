@@ -404,6 +404,12 @@ class CasesTest {
         val refs = listOf(TestRef("com.x.ATest", "ATest", ":app", "a", false), TestRef("com.x.BTest", "BTest", ":core:data", "b", false),
             TestRef("com.x.UiTest", "UiTest", ":app", "c", instrumented = true))
         assertEquals(":app:testDebugUnitTest --tests com.x.ATest :core:data:testDebugUnitTest --tests com.x.BTest", testTasks(refs, "testDebugUnitTest"))
+        // The report says so when no test reaches a change, so "no tests" is not read as "not checked".
+        val repo = Node("class::com.x.Repo", "injectable", "Repo", "app/Data.kt", 1, ":app", mutableMapOf())
+        fun report(tests: List<TestRef>) = formatDiff(DiffReport("HEAD", listOf("app/Data.kt"), 1, emptyList(), listOf(repo),
+            emptyList(), emptyList(), emptyList(), tests = tests), markdown = false)
+        assertTrue("Tests that cover it: none found" in report(emptyList()))
+        assertTrue("Tests that cover it (1): ATest" in report(refs.take(1)))
     }
 
     @Test

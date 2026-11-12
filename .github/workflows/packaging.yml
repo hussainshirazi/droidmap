@@ -1,10 +1,12 @@
 name: Packaging
 
-# Installs the latest release the ways the README describes, on each system. It also runs weekly
-# and by hand: the release workflow's own push (new versions in Formula/ and bucket/) starts no workflow.
+# Installs the latest release the ways the README describes, on each system: on changes to the installers,
+# weekly, and at the end of each release (release.yml starts it: a workflow's own pushes start no workflow).
 on:
   push:
     branches: [main]
+    paths: [install.sh, install.ps1, "Formula/**", "bucket/**", .github/workflows/packaging.yml]
+  pull_request:
     paths: [install.sh, install.ps1, "Formula/**", "bucket/**", .github/workflows/packaging.yml]
   schedule:
     - cron: "0 6 * * 1"

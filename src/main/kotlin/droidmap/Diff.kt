@@ -262,6 +262,7 @@ fun formatDiff(r: DiffReport, markdown: Boolean): String {
     val tests = (r.changed.filter { it.kind == "test" }.map { it.label } + r.affected.filter { it.kind == "test" }.map { it.label } +
         r.tests.map { it.name }).distinct().sorted()
     if (tests.isNotEmpty()) out += listOf("", "${b}Tests that cover it$b (${tests.size}): " + names(tests, markdown))
+    else if (r.changed.isNotEmpty()) out += listOf("", "${b}Tests that cover it$b: none found (no test class calls the changed code, directly or through other code).")
     if (r.findings.isNotEmpty()) {
         out += listOf("", "${b}Findings in the changed files$b (${r.findings.size}):")
         for (f in r.findings.take(SHOWN)) {

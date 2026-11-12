@@ -1,6 +1,12 @@
 # Changelog
 
-## 0.3.0
+## Unreleased
+
+- `diff` says when no test class reaches the changed code ("Tests that cover it: none found"), so an empty list is not read as "not checked".
+- The GitHub Action checks the SHA-256 of the droidmap release it downloads, as the installers do.
+- The Windows installer (`install.ps1`) refused every release since 0.2.0 with "the download does not match its checksum". Fixed (on main, which the install command downloads from).
+
+## 0.3.0 (2026-11-12)
 
 - The Claude Code plugin needs nothing installed but Java, and finds Android Studio's: the first time, it downloads the droidmap release that matches the plugin and checks its SHA-256.
 - Tests that reach a change: droidmap follows calls through what the code declares (a property's or parameter's type, a constructor, a function's return type, `by viewModels<X>()`), and a call on an interface reaches its implementations. `diff` and `impact` list the test classes whose calls reach the changed code, and `diff --format tests` prints them as Gradle arguments (`:core:data:testDebugUnitTest --tests com.example.RepoTest`) to run only those.

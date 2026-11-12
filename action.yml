@@ -72,6 +72,15 @@ runs:
           url="https://github.com/hussainshirazi/droidmap/releases/latest/download/droidmap.jar"
         fi
         curl -fsSL --retry 3 -o "$RUNNER_TEMP/droidmap.jar" "$url"
+        # Releases since 0.2.0 publish a checksum; check it when there is one.
+        if curl -fsSL --retry 3 -o "$RUNNER_TEMP/droidmap.jar.sha256" "$url.sha256"; then
+          expected=$(cut -d ' ' -f 1 "$RUNNER_TEMP/droidmap.jar.sha256")
+          if command -v sha256sum >/dev/null; then actual=$(sha256sum "$RUNNER_TEMP/droidmap.jar" | cut -d ' ' -f 1)
+          else actual=$(shasum -a 256 "$RUNNER_TEMP/droidmap.jar" | cut -d ' ' -f 1); fi
+          if [ "$actual" != "$expected" ]; then
+            echo "::error::The downloaded droidmap.jar does not match its checksum"; exit 1
+          fi
+        fi
         echo "jar=$RUNNER_TEMP/droidmap.jar" >> "$GITHUB_OUTPUT"
 
     - name: Find the base to compare schema files with
