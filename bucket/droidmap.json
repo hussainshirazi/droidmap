@@ -1,16 +1,19 @@
 {
-    "version": "0.1.0",
-    "description": "Android-aware project graph, checks and MCP server",
-    "homepage": "https://github.com/hussainshirazi/droidmap",
-    "license": "Apache-2.0",
-    "suggest": {
-        "JDK": ["java/temurin-lts-jre", "java/openjdk"]
-    },
-    "url": "https://github.com/hussainshirazi/droidmap/releases/download/v0.1.0/droidmap.jar",
-    "hash": "0a4b8f9cff64095a05cfe64d0558b688adfc07e9c1a9ed36dadd836416e5524e",
-    "bin": "droidmap.jar",
-    "checkver": "github",
-    "autoupdate": {
-        "url": "https://github.com/hussainshirazi/droidmap/releases/download/v$version/droidmap.jar"
-    }
+  "version": "0.2.0",
+  "description": "Android-aware project graph, checks and MCP server",
+  "homepage": "https://github.com/hussainshirazi/droidmap",
+  "license": "Apache-2.0",
+  "suggest": {
+    "JDK": [
+      "java/temurin-lts-jre",
+      "java/openjdk"
+    ]
+  },
+  "url": "https://github.com/hussainshirazi/droidmap/releases/download/v0.2.0/droidmap.jar",
+  "hash": "400ef82313bc91d6aeff2418eae93cb416459dc8844c41feb431143d4e25172a",
+  "bin": "droidmap.jar",
+  "checkver": "github",
+  "autoupdate": {
+    "url": "https://github.com/hussainshirazi/droidmap/releases/download/v$version/droidmap.jar"
+  }
 }
