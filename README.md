@@ -261,7 +261,9 @@ droidmap is static and deliberately conservative. When it cannot resolve somethi
 ./gradlew test fatJar        # run the tests and build build/libs/droidmap.jar
 ```
 
-The code lives in `src/main/kotlin/droidmap`. `KotlinReader` and `JavaReader` read each file into one language-neutral model (`Model.kt`); the extractors in `extract/` (Gradle, Room, Navigation, Hilt, Koin, Manifest) turn the model into the graph; the rules are in `Checks.kt`, queries in `Query.kt`, `diff` in `Diff.kt`, the report in `Report.kt` and the MCP server in `Mcp.kt`. The tests run every rule against a small synthetic project in `src/test/resources/sample` and small projects written per case (`CasesTest`); a new rule or a fixed false positive should come with a case.
+The code lives in `src/main/kotlin/droidmap`. `KotlinReader` and `JavaReader` read each file into one language-neutral model (`Model.kt`); the extractors in `extract/` (Gradle, Room, Navigation, Hilt, Koin, WorkManager, Manifest) turn the model into the graph; the rules are in `Checks.kt` with a page each in `docs/rules/`, queries in `Query.kt`, `diff` in `Diff.kt`, the report in `Report.kt` and the MCP server in `Mcp.kt`. The tests run every rule against a small synthetic project in `src/test/resources/sample` and small projects written per case (`CasesTest`); a new rule or a fixed false positive should come with a case.
+
+CI also runs droidmap on open-source apps at fixed commits ([realworld/projects.txt](realworld/projects.txt): Now in Android, its Koin port, Google's architecture-components-samples and PeopleInSpace) and fails when their findings change. If a change is right, update `realworld/expected/` with what `realworld/check.sh` prints.
 
 Ideas and bug reports are welcome in the issues. A small snippet that reproduces the problem helps most.
 

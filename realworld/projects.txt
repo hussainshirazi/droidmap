@@ -1,0 +1,6 @@
+# Open-source Android projects droidmap is checked on, each at a fixed commit: name, repository, commit.
+# Their findings (rule, file, line) are in expected/<name>.txt; realworld/check.sh compares them.
+nowinandroid https://github.com/android/nowinandroid.git 2982e63cb691ad49cd009aab43dc206fee6699c2
+nowinandroid-koin https://github.com/InsertKoinIO/nowinandroid.git 0c59562dbb96544c80f444bd1ec6f0cabc54b45e
+architecture-components-samples https://github.com/android/architecture-components-samples.git e849ce3004ccd1132a121cf513bbcb7996d95c30
+PeopleInSpace https://github.com/joreilly/PeopleInSpace.git 2db46a039837989b3a9337a56bab832318c05fa4

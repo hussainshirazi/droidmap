@@ -1,0 +1,32 @@
+name: Real projects
+
+# droidmap on open-source Android apps at fixed commits (realworld/projects.txt). Their findings must stay
+# as recorded in realworld/expected/, so a change that adds a false positive, or loses a real finding, fails
+# here. The apps are fetched and read, never built or run.
+on:
+  push:
+    branches: [main]
+    paths: ["src/main/**", "build.gradle.kts", "realworld/**", ".github/workflows/realworld.yml"]
+  pull_request:
+    paths: ["src/main/**", "build.gradle.kts", "realworld/**", ".github/workflows/realworld.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  realworld:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: gradle/actions/setup-gradle@v4
+      - run: chmod +x gradlew && ./gradlew fatJar
+      - uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/droidmap-realworld
+          key: realworld-${{ hashFiles('realworld/projects.txt') }}
+      - run: bash realworld/check.sh build/libs/droidmap.jar

@@ -1,0 +1,6 @@
+room-destructive-fallback GithubBrowserSample/app/src/main/java/com/android/example/github/di/AppModule.kt:50
+room-destructive-fallback PagingWithNetworkSample/app/src/main/java/com/android/example/paging/pagingwithnetwork/reddit/db/RedditDb.kt:43
+room-migration-path PersistenceMigrationsSample/app/src/room3/java/com/example/android/persistence/migrations/UsersDatabase.java:33
+room-schema-missing BasicRxJavaSampleKotlin/app/src/main/java/com/example/android/observability/persistence/UsersDatabase.kt:28
+room-schema-missing MADSkillsNavigationSample/app/src/main/java/com/android/samples/donuttracker/storage/DonutDatabase.kt:28
+room-schema-missing PagingSample/app/src/main/java/paging/android/example/com/pagingsample/CheeseDb.kt:28

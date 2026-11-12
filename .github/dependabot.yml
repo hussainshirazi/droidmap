@@ -1,0 +1,16 @@
+# Weekly update pull requests. The Kotlin plugin and the Kotlin compiler droidmap parses with move together:
+# a new parser version is the most likely thing to change what droidmap reads, which CI and the real-project
+# run (realworld.yml) check on the pull request.
+version: 2
+updates:
+  - package-ecosystem: gradle
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      kotlin:
+        patterns: ["org.jetbrains.kotlin*"]
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly

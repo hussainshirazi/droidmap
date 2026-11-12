@@ -1,0 +1,2 @@
+hilt-app-not-registered sync/work/src/prod/kotlin/com/google/samples/apps/nowinandroid/sync/services/SyncNotificationsService.kt:28
+room-migration-untested core/database/src/main/kotlin/com/google/samples/apps/nowinandroid/core/database/NiaDatabase.kt:66
