@@ -18,7 +18,11 @@ Invoke-WebRequest "$url/droidmap.jar" -OutFile "$jar.part" -UseBasicParsing
 
 # Releases since 0.2.0 publish a checksum; check it when there is one.
 $expected = $null
-try { $expected = ((Invoke-WebRequest "$url/droidmap.jar.sha256" -UseBasicParsing).Content -split '\s+')[0] } catch { }
+# (Saved to a file and read as text: PowerShell 7 gives the content of a download it takes for binary as bytes.)
+try {
+    Invoke-WebRequest "$url/droidmap.jar.sha256" -OutFile "$jar.sha256" -UseBasicParsing
+    $expected = ((Get-Content -Raw "$jar.sha256").Trim() -split '\s+')[0]
+} catch { } finally { Remove-Item -ErrorAction SilentlyContinue "$jar.sha256" }
 if ($expected) {
     $actual = (Get-FileHash "$jar.part" -Algorithm SHA256).Hash
     if ($actual -ne $expected) {
