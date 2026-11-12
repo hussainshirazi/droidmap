@@ -14,7 +14,7 @@ Call `droidmap_impact` (or `droidmap impact <name>`) on what you are about to ch
 ## After changing code
 
 1. `droidmap_check` (or `droidmap check`): fix every error before you finish. For a finding you do not understand, `droidmap_explain` with its rule (or `droidmap explain <rule>`) says why it matters and how to fix it.
-2. `droidmap_diff` (or `droidmap diff`): what your changes touch, and the tests to run. Run those tests.
+2. `droidmap_diff` (or `droidmap diff`): what your changes touch, and the tests to run. Run those tests. When you removed something, it lists what still depended on it: update those too.
 
 ## Rules that need care
 
@@ -23,4 +23,4 @@ Call `droidmap_impact` (or `droidmap impact <name>`) on what you are about to ch
 - **A class is injected**: something must bind it (`@Inject` constructor, `@Binds` or `@Provides` in Hilt; a definition in a Koin module). `@AndroidEntryPoint` classes need the `@HiltAndroidApp` Application named in the manifest.
 - **A module dependency changed**: run `droidmap_check` for the project's module rules and cycles.
 
-droidmap is static: it does not read generated code or follow values built at runtime. What it cannot resolve is listed as unresolved, never guessed.
+droidmap is static: it does not run Gradle, read code a build generates (Safe Args calls are matched by name), trace calls on variables, or follow values built at runtime. What it cannot resolve is listed as unresolved, never guessed.

@@ -145,7 +145,7 @@ class McpServer(private val root: Path, private val configPath: Path? = null, pr
                 if (!Git.isCommit(root, base)) throw ToolError("$base is not a commit in the git repository of $root")
                 val changes = try { readChanges(root, base) } catch (e: UsageError) { throw ToolError(e.message ?: "git diff failed") }
                 return formatDiff(diffReport(g, changes, runChecks(g, cfg), built.project.readPaths(),
-                    ((args["depth"] as? Number)?.toInt() ?: 4).coerceIn(1, 10)), markdown = false)
+                    ((args["depth"] as? Number)?.toInt() ?: 4).coerceIn(1, 10), baseGraph(built, changes)), markdown = false)
             }
             "droidmap_check" -> {
                 val floor = SEVERITY_ORDER[args["min_severity"] as? String ?: "info"] ?: 2

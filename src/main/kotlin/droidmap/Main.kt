@@ -235,8 +235,9 @@ class Cli(private val out: PrintStream = System.out, private val err: PrintStrea
             return 0
         }
         val built = buildGraph(Project(r, cfg))
-        val report = diffReport(built.graph, readChanges(r, base), runChecks(built.graph, cfg), built.project.readPaths(),
-            a.opt("--depth")?.toIntOrNull() ?: 4)
+        val changes = readChanges(r, base)
+        val report = diffReport(built.graph, changes, runChecks(built.graph, cfg), built.project.readPaths(),
+            a.opt("--depth")?.toIntOrNull() ?: 4, baseGraph(built, changes))
         out.println(if (format == "json") jsonText(report.toMap()) else formatDiff(report, markdown = format == "markdown"))
         return 0
     }

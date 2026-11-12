@@ -315,8 +315,202 @@ class CasesTest {
             +++ /dev/null
             @@ -1,4 +0,0 @@""".trimIndent())
         assertEquals(listOf(4..5, 12..12, 21..21), files.single { it.path == "A.kt" }.ranges)
+        assertEquals(listOf(10..10, 20..22), files.single { it.path == "A.kt" }.removed, "the lines removed at the base")
         assertTrue(files.single { it.path == "New.kt" }.whole)
+        assertEquals(null, files.single { it.path == "New.kt" }.old)
         assertEquals(listOf("Gone.kt"), deleted)
+    }
+
+    @Test
+    fun diffListsWhatAChangeRemoves() {
+        val home = "app/src/main/kotlin/com/x/Home.kt"
+        val root = write(*app,
+            home to """
+                package com.x
+                import androidx.navigation.compose.composable
+
+                @Composable fun HomeScreen() { }
+                @Composable fun OldScreen() { }
+                fun AppNav() {
+                    NavHost(nav, "home") {
+                        composable("home") { HomeScreen() }
+                        composable("old") { OldScreen() }
+                    }
+                }""",
+            "app/src/main/kotlin/com/x/Helper.kt" to """
+                package com.x
+                import javax.inject.Inject
+                class Helper @Inject constructor()""",
+            "app/src/main/kotlin/com/x/Consumer.kt" to """
+                package com.x
+                import dagger.hilt.android.lifecycle.HiltViewModel
+                import javax.inject.Inject
+                @HiltViewModel class Consumer @Inject constructor(helper: Helper) : ViewModel()""")
+        commitAll(root)
+        val file = root.resolve(home)
+        Files.writeString(file, Files.readString(file).lines().filter { "Old" !in it && "\"old\"" !in it }.joinToString("\n"))
+        Files.delete(root.resolve("app/src/main/kotlin/com/x/Helper.kt"))
+        val buf = ByteArrayOutputStream()
+        assertEquals(0, runMain(listOf("diff", root.toString(), "--format", "json"), PrintStream(buf), PrintStream(ByteArrayOutputStream())))
+        @Suppress("UNCHECKED_CAST")
+        val r = fromJson(compactJson.parseToJsonElement(buf.toString(Charsets.UTF_8))) as Map<String, Any?>
+        assertEquals(listOf("class::com.x.Helper", "nav.dest::old", "fun::com.x.OldScreen"), r.maps("removed").map { it.str("id") })
+        // Consumer still injects the removed Helper: the change breaks it.
+        assertTrue("Consumer" in r.maps("affected").map { it.str("label") }, r.maps("affected").toString())
+        val text = ByteArrayOutputStream()
+        runMain(listOf("diff", root.toString()), PrintStream(text), PrintStream(ByteArrayOutputStream()))
+        assertTrue("Removed (3): Helper (injectable), old (nav_destination), OldScreen (screen)" in text.toString(Charsets.UTF_8), text.toString(Charsets.UTF_8))
+    }
+
+    @Test
+    fun safeArgsDirectionsAndPopOnlyActions() {
+        val (g, f) = build(*app,
+            "app/src/main/res/navigation/nav_graph.xml" to """
+                <navigation $ns android:id="@+id/nav_graph" app:startDestination="@id/home">
+                  <fragment android:id="@+id/home" android:name="com.x.HomeFragment">
+                    <action android:id="@+id/action_home_to_detail" app:destination="@id/detail"/>
+                  </fragment>
+                  <fragment android:id="@+id/detail" android:name="com.x.DetailFragment">
+                    <action android:id="@+id/back_home" app:popUpTo="@id/home"/>
+                  </fragment>
+                  <fragment android:id="@+id/settings" android:name="com.x.SettingsFragment"/>
+                  <action android:id="@+id/action_global_settings" app:destination="@id/settings"/>
+                </navigation>""",
+            "app/src/main/kotlin/com/x/HomeFragment.kt" to """
+                package com.x
+                import androidx.navigation.fragment.findNavController
+                class HomeFragment : Fragment() {
+                    fun open(id: Long) { findNavController().navigate(HomeFragmentDirections.actionHomeToDetail(id).setFrom("home")) }
+                    fun settings() { findNavController().navigate(NavGraphDirections.actionGlobalSettings()) }
+                    fun wrong() { findNavController().navigate(HomeFragmentDirections.actionHomeToNowhere()) }
+                }""",
+            "app/src/main/java/com/x/DetailFragment.java" to """
+                package com.x;
+                import androidx.navigation.NavDirections;
+                import androidx.navigation.Navigation;
+                public class DetailFragment extends Fragment {
+                    void back(View v) {
+                        NavDirections d = DetailFragmentDirections.backHome();
+                        Navigation.findNavController(v).navigate(d);
+                    }
+                }""")
+        assertTrue(g.edge("navigates_to", "open", "@id/detail"))
+        assertTrue(g.edge("navigates_to", "settings", "@id/settings"), "a global action, through the graph's Directions class")
+        assertTrue(g.edge("navigates_to", "back", "@id/home"), "Java, through a local")
+        assertTrue(g.edge("navigates_to", "@id/detail", "@id/home"), "an action with only popUpTo goes back to it")
+        assertEquals(listOf("HomeFragmentDirections.actionHomeToNowhere() matches no navigation XML action"),
+            g.unresolved.filter { it.kind == "nav_target" }.map { it.reason })
+        assertEquals(emptyList(), f.map { it.message })
+    }
+
+    @Test
+    fun navigation3EntriesBuiltByHand() {
+        val (g, f) = build(*app, "app/src/main/kotlin/com/x/Nav.kt" to """
+            package com.x
+            import androidx.navigation3.runtime.NavEntry
+            import androidx.navigation3.runtime.rememberNavBackStack
+            import androidx.navigation3.ui.NavDisplay
+
+            data object Home : NavKey
+            data class Detail(val id: Long) : NavKey
+            data object Orphan : NavKey
+
+            @Composable fun HomeScreen(onOpen: (Long) -> Unit) { }
+            @Composable fun DetailScreen(id: Long) { }
+
+            @Composable fun App() {
+                val backStack = rememberNavBackStack(Home)
+                NavDisplay(backStack = backStack, entryProvider = { key ->
+                    when (key) {
+                        is Home -> NavEntry(key) { HomeScreen(onOpen = { backStack.add(Detail(it)) }) }
+                        is Detail -> NavEntry(key) { DetailScreen(key.id) }
+                        Orphan -> NavEntry(key) { }
+                        else -> error("unknown key")
+                    }
+                })
+            }""")
+        assertTrue(g.edge("shows", "Home", "HomeScreen") && g.edge("shows", "Detail", "DetailScreen"))
+        assertTrue(g.edge("starts_at", "App", "Home") && g.edge("navigates_to", "App", "Detail"))
+        assertEquals(listOf("nav-unreachable Orphan"), f.map { "${it.rule} ${g.label(it.node!!)}" })
+    }
+
+    @Test
+    fun navigationHelpersSeveralLevelsDeep() {
+        val (g, _) = build(*app, "app/src/main/kotlin/com/x/Nav.kt" to """
+            package com.x
+            import androidx.navigation.compose.NavHost
+            import androidx.navigation.compose.composable
+
+            fun AppNav(nav: NavHostController) { NavHost(nav, "home") { composable("home") { }; composable("item/{id}") { } } }
+            class Router(private val nav: NavHostController) {
+                fun go(route: String) = nav.navigate(route)
+                fun track(route: String) { println(route); go(route) }
+                fun openItem(id: String) = track("item/${'$'}id")
+            }
+            fun onHome(r: Router) = r.track("home")
+            fun onItem(r: Router) = r.openItem("7")""")
+        assertTrue(g.edge("navigates_to", "onHome", "home"), "onHome -> track -> go -> navigate")
+        assertTrue(g.edge("navigates_to", "openItem", "item/{id}"))
+        assertTrue(g.unresolved.none { it.kind == "nav_target" }, g.unresolved.toString())
+    }
+
+    @Test
+    fun koinComponentScanCoversOnlyItsPackages() {
+        val files = arrayOf(*app,
+            "app/src/main/kotlin/com/x/di/AppModule.kt" to """
+                package com.x.di
+                import org.koin.core.annotation.ComponentScan
+                import org.koin.core.annotation.Module
+                @Module @ComponentScan("com.x.data") class AppModule""",
+            "app/src/main/kotlin/com/x/data/Repo.kt" to """
+                package com.x.data
+                import org.koin.core.annotation.Single
+                @Single class Repo""",
+            "app/src/main/kotlin/com/x/feature/Store.kt" to """
+                package com.x.feature
+                import org.koin.core.annotation.Single
+                interface Store
+                @Single class FeatureStore : Store
+                @Single class Unused""",
+            "app/src/main/kotlin/com/x/data/ui/HomeViewModel.kt" to """
+                package com.x.data.ui
+                import com.x.data.Repo
+                import com.x.feature.Store
+                import org.koin.core.annotation.KoinViewModel
+                @KoinViewModel class HomeViewModel(repo: Repo, store: Store) : ViewModel()""")
+        val (_, f) = build(*files)
+        assertEquals(listOf("HomeViewModel gets Store from Koin, but FeatureStore (@Single), which would provide it, is in com.x.feature, " +
+            "which no @ComponentScan covers, so Koin never defines it (NoDefinitionFoundException at runtime): add the package to a module's @ComponentScan"),
+            f.map { it.message })
+        // KOIN_DEFAULT_MODULE puts the classes no scan finds in a default module.
+        write("app/build.gradle.kts" to """plugins { id("com.android.application") }; ksp { arg("KOIN_DEFAULT_MODULE", "true") }""")
+        assertEquals(emptyList(), runChecks(buildGraph(tmp)).map { it.message })
+        // Without any @ComponentScan, every annotated class counts.
+        write(*app)
+        Files.delete(tmp.resolve("app/src/main/kotlin/com/x/di/AppModule.kt"))
+        assertEquals(emptyList(), runChecks(buildGraph(tmp)).map { it.message })
+    }
+
+    @Test
+    fun aNameWithoutAnImportIsNotAProjectClassOfAnotherPackage() {
+        val (g, f) = build(*app,
+            "app/src/main/kotlin/com/x/model/Result.kt" to "package com.x.model\nsealed class Result",
+            "app/src/main/kotlin/com/x/ui/HomeViewModel.kt" to """
+                package com.x.ui
+                import dagger.hilt.android.lifecycle.HiltViewModel
+                import javax.inject.Inject
+                @HiltViewModel class HomeViewModel @Inject constructor(cached: Result<Int>) : ViewModel()""",
+            "app/src/main/kotlin/com/x/ui/Base.kt" to """
+                package com.x.ui
+                abstract class Base { class Inner }
+                class Sub : Base() { val inner = Inner() }""")
+        // Kotlin's Result, not com.x.model.Result: no edge, and no missing binding to report.
+        assertTrue(g.edges.none { it.target == "class::com.x.model.Result" })
+        assertEquals(emptyList(), f.map { it.message })
+        val code = Code.read(Project(tmp))
+        val src = code.sources.single { it.path.endsWith("Base.kt") }
+        assertEquals("com.x.ui.Base.Inner", code.index.resolveType("Inner", src, src.types.single { it.name == "Sub" }.psi)?.fq,
+            "a class nested in a supertype")
     }
 
     @Test
@@ -805,6 +999,7 @@ allowed_permissions = ["android.permission.INTERNET"]""",
                 import com.x.data.ItemRepository
                 import com.x.data.ItemStore
                 import com.x.data.OfflineItemRepository
+                import com.x.data.Platform
                 import com.x.data.Store
                 import org.koin.core.module.dsl.singleOf
                 import org.koin.core.module.dsl.viewModelOf
@@ -844,7 +1039,7 @@ allowed_permissions = ["android.permission.INTERNET"]""",
         assertTrue(g.edge("injects", "OfflineItemRepository", "Store") && g.edge("injects", "OfflineItemRepository", "Platform"))
         assertTrue(g.edge("bound_by", "Store", "dataModule.single ItemStore") && g.edge("injects", "ItemStore", "Platform"))
         assertTrue(g.edge("uses_viewmodel", "HomeScreen", "HomeViewModel") && g.edge("bound_by", "TimeSource", "Clock"))
-        // An expect class and its two actuals are one type, so Platform() resolves without an import.
+        // An expect class and its two actuals are one type.
         assertTrue(g.edge("bound_by", "Platform", "dataModule.single Platform"))
         assertEquals(listOf("koin-missing-definition Analytics", "koin-missing-definition Missing"),
             f.map { "${it.rule} ${it.node?.substringAfterLast('.')}" }.sorted())

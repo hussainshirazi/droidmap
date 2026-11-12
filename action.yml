@@ -21,6 +21,13 @@ inputs:
   args:
     description: Extra arguments for droidmap check, such as `--config tools/droidmap.toml`.
     default: ""
+  merge-manifest:
+    description: >-
+      Run this Gradle task first so the merged manifest exists, and droidmap also checks the permissions libraries add:
+      `true` means processReleaseMainManifest; with product flavors name the variant's, such as processProdReleaseMainManifest.
+      It runs your build with the project's Gradle wrapper, so set up the JDK your build needs before this step
+      (and never use it in a pull_request_target workflow, which would run a fork's build with your secrets). Off by default.
+    default: ""
   base:
     description: Git ref to compare Room schema files with (room-schema-changed). `auto` uses a pull request's base branch, `none` turns it off; another ref must already be fetched.
     default: auto
@@ -88,6 +95,22 @@ runs:
           *) base="$INPUT_BASE" ;;
         esac
         echo "base=$base" >> "$GITHUB_OUTPUT"
+
+    - name: Merge the manifest
+      if: inputs.merge-manifest != '' && inputs.merge-manifest != 'false'
+      shell: bash
+      working-directory: ${{ inputs.path }}
+      env:
+        TASK: ${{ inputs.merge-manifest }}
+      run: |
+        if [ "$TASK" = "true" ]; then TASK=processReleaseMainManifest; fi
+        if [ ! -f gradlew ]; then
+          echo "::warning::droidmap found no gradlew in $PWD, so it checks the source manifests only"; exit 0
+        fi
+        chmod +x gradlew
+        if ! ./gradlew --no-daemon --quiet "$TASK"; then
+          echo "::warning::droidmap could not run $TASK, so it checks the source manifests only"
+        fi
 
     - name: Run droidmap check
       id: check

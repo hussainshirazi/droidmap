@@ -25,7 +25,7 @@ fun buildGraph(p: Project, base: String? = null, previous: Code? = null): Built 
     RoomScan(p, code, g, base).run()
     NavScan(p, code, g).run()
     HiltScan(code, g).run()
-    KoinScan(code, g).run()
+    KoinScan(p, code, g).run()
     WorkScan(code, g).run()
     ViewModelUses(code, g).run() // after the DI scans, which mark the ViewModels
     ManifestScan(p, code, g).run()

@@ -98,8 +98,11 @@ fun sourceSetOf(rel: String): String? {
 
 fun isTestSet(sourceSet: String?): Boolean = sourceSet != null && "test" in sourceSet.lowercase()
 
-/** The files of a project that droidmap reads, by kind, and its Gradle modules once settings have been read. */
-class Project(root: Path, config: Config? = null) {
+/**
+ * The files of a project that droidmap reads, by kind, and its Gradle modules once settings have been read.
+ * [overlay] replaces files with other text (null: the file is not there), as for the project at a base commit.
+ */
+class Project(root: Path, config: Config? = null, private val overlay: Map<String, String?> = emptyMap()) {
     val root: Path = root.toAbsolutePath().normalize()
     val config: Config = config ?: Config.load(this.root)
     val ktPaths = ArrayList<String>()
@@ -143,24 +146,18 @@ class Project(root: Path, config: Config? = null) {
 
             override fun visitFileFailed(file: Path, exc: IOException): FileVisitResult = FileVisitResult.CONTINUE
         })
-        found.sortBy { it.first }
-        for ((rel, size, mtime) in found) {
+        // A file in the overlay gets its text's size and hash as its stamp, so parsed files are reused only when the text is the same.
+        val replaced = overlay.filterValues { it != null }.mapValues { (_, text) ->
+            val bytes = text!!.toByteArray(Charsets.UTF_8)
+            Triple(bytes.size.toLong(), "overlay:" + MessageDigest.getInstance("SHA-256").digest(bytes).take(8).joinToString("") { "%02x".format(it) }, 0L)
+        }
+        val listed = found.filter { it.first !in overlay }.map { Triple(it.first, it.second, "${it.second}:${it.third}") } +
+            replaced.map { (rel, v) -> Triple(rel, v.first, v.second) }
+        for ((rel, size, stamp) in listed.sortedBy { it.first }) {
             if (this.config.ignorePaths.any { glob(rel, it) }) continue
-            val low = rel.substringAfterLast('/').lowercase()
-            val dir = rel.substringBeforeLast('/', "")
-            val bucket = when {
-                low.endsWith(".kt") -> ktPaths
-                low.endsWith(".java") -> javaPaths
-                low.endsWith(".gradle.kts") || low.endsWith(".gradle") -> gradlePaths
-                low == "androidmanifest.xml" -> manifestPaths
-                low.endsWith(".xml") && "/res/navigation" in "/$dir" -> navXmlPaths
-                low.endsWith(".xml") && "/res/menu" in "/$dir" -> menuXmlPaths
-                low.endsWith(".versions.toml") -> tomlPaths
-                low.endsWith(".json") && low.dropLast(5).isNotEmpty() && low.dropLast(5).all { it.isDigit() } -> jsonPaths
-                else -> null
-            } ?: continue
-            stamps[rel] = "$size:$mtime"
-            digest.update("$rel\u0000$size\u0000$mtime\n".toByteArray())
+            val bucket = bucket(rel) ?: continue
+            stamps[rel] = stamp
+            digest.update("$rel\u0000$stamp\n".toByteArray())
             if (size > MAX_FILE_BYTES) { skipped.add(rel); continue }
             bucket.add(rel)
         }
@@ -199,7 +196,27 @@ class Project(root: Path, config: Config? = null) {
         return out.sortedBy { it.first }
     }
 
-    fun read(rel: String): String = String(Files.readAllBytes(root.resolve(rel)), Charsets.UTF_8)
+    /** The list of files of [rel]'s kind, or null for a file droidmap does not read. */
+    private fun bucket(rel: String): ArrayList<String>? {
+        val low = rel.substringAfterLast('/').lowercase()
+        val dir = rel.substringBeforeLast('/', "")
+        return when {
+            low.endsWith(".kt") -> ktPaths
+            low.endsWith(".java") -> javaPaths
+            low.endsWith(".gradle.kts") || low.endsWith(".gradle") -> gradlePaths
+            low == "androidmanifest.xml" -> manifestPaths
+            low.endsWith(".xml") && "/res/navigation" in "/$dir" -> navXmlPaths
+            low.endsWith(".xml") && "/res/menu" in "/$dir" -> menuXmlPaths
+            low.endsWith(".versions.toml") -> tomlPaths
+            low.endsWith(".json") && low.dropLast(5).isNotEmpty() && low.dropLast(5).all { it.isDigit() } -> jsonPaths
+            else -> null
+        }
+    }
+
+    /** Whether droidmap reads files like [rel] (by name and folder; it may not exist). */
+    fun reads(rel: String): Boolean = bucket(rel) != null && config.ignorePaths.none { glob(rel, it) }
+
+    fun read(rel: String): String = overlay[rel] ?: String(Files.readAllBytes(root.resolve(rel)), Charsets.UTF_8)
 
     /** When [rel] was last modified, as of the scan. */
     fun mtime(rel: String): Long? = stamps[rel]?.substringAfter(':')?.toLongOrNull()

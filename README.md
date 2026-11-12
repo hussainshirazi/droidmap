@@ -17,7 +17,7 @@ Generic code graphs see classes and calls. They do not see that:
 
 droidmap reads the Android wiring directly (Gradle, Room, Navigation, Hilt, Koin, the manifest, in Kotlin and Java) and turns it into a graph. Run its rules in CI, get a comment on every pull request saying what the change touches, ask it what depends on a class before you change it, and hand it to an AI agent over MCP.
 
-It reads source files only: it never runs Gradle, never compiles your code and never sends anything anywhere.
+It reads source files only: it never runs Gradle, never compiles your code and never sends anything anywhere. (The GitHub Action runs one Gradle task, for the merged manifest, only when you ask it to.)
 
 ![droidmap check and droidmap diff in a terminal](docs/demo.svg)
 
@@ -92,7 +92,9 @@ On each pull request the Action comments with what the change touches, and updat
 > | Dependency injection | `DataModule.bindItems`, `OfflineItemRepository` |
 > | Modules | `:app`, `:core:data`, `:core:database`, `:feature:detail-screen`, `:feature:home` |
 
-Findings show up as code scanning alerts, as notes on the changed lines and in the job summary, and the step fails on errors. The Action needs no Java setup: it uses the JDK that GitHub's runners already have. To check the merged manifest's permissions as well, run a Gradle build (for example `./gradlew :app:processReleaseManifest`) before it.
+When a change removes a declaration (a destination, a binding, a DAO method), the comment lists it under **Removed**, and what still depended on it under **Affected**.
+
+Findings show up as code scanning alerts, as notes on the changed lines and in the job summary, and the step fails on errors. The Action needs no Java setup: it uses the JDK that GitHub's runners already have. To check the permissions that libraries add to the merged manifest as well, set `merge-manifest: true`: it runs `./gradlew processReleaseMainManifest` first, so that job needs the JDK your build uses (`actions/setup-java`).
 
 | Input | Default | |
 |---|---|---|
@@ -102,6 +104,7 @@ Findings show up as code scanning alerts, as notes on the changed lines and in t
 | `upload-sarif` | `true` | `false` on a private repository without GitHub Advanced Security (code scanning is free on public ones) |
 | `args` | | extra arguments for `droidmap check`, such as `--config tools/droidmap.toml` |
 | `base` | `auto` | the git ref to compare with: `auto` is a pull request's base branch, `none` turns it off; another ref must be fetched (for example with `fetch-depth: 0`) |
+| `merge-manifest` | off | `true` runs `processReleaseMainManifest` first, so the permissions libraries add are checked too; with product flavors, the variant's task, such as `processProdReleaseMainManifest`. It runs your build, so never use it in a `pull_request_target` workflow |
 | `version` | the pinned release | a droidmap release such as `0.2.0` |
 
 ### Run only the tests a change can break
@@ -160,9 +163,9 @@ Without installing anything but Java: `"command": "java", "args": ["-jar", "/pat
 |---|---|
 | **Gradle** | Modules from `settings.gradle(.kts)`; `project(":x")` and type-safe `projects.x.y` dependencies in Kotlin DSL and Groovy; plugins from the version catalog; the project dependencies that **convention plugins in an included build** (`build-logic`) add to every module that applies them; and Kotlin Multiplatform source sets (a dependency in `commonTest` is a test dependency). |
 | **Room** | Databases, entities, DAOs (the tables each `@Query` uses and the entities each `@Insert`, `@Update`, `@Delete` or `@Upsert` writes, inherited ones included), manual and auto migrations, the exported schema JSON, the columns each entity has compared with that JSON, and **which `MigrationTestHelper` test covers which migration step**. |
-| **Navigation** | Compose Navigation with string routes (built from constants, templates and helper functions) or type-safe routes, **Navigation 3** (`entry<Key>`), XML navigation graphs (across files, with deep links and menu items), and `navigate(...)` calls in Kotlin and Java, including calls through your own helpers such as `navigateToTab(route)`. |
+| **Navigation** | Compose Navigation with string routes (built from constants, templates and helper functions) or type-safe routes, **Navigation 3** (`entry<Key>`, and `NavEntry(key)` in a `when` over the keys), XML navigation graphs (across files, with deep links, menu items and actions that only pop back), and `navigate(...)` calls in Kotlin and Java: with routes, `R.id` actions, **Safe Args** directions (`HomeFragmentDirections.actionHomeToDetail(id)`), and through your own helpers such as `navigateToTab(route)`, up to five helpers deep. |
 | **Hilt** | `@HiltViewModel`s, `@Inject` constructors and fields, `@Provides` and `@Binds` with qualifiers, entry points, and which screens, activities and fragments use which ViewModel. |
-| **Koin** | Modules and definitions (`single`, `factory`, `viewModel`, `singleOf(::X)`, `bind`), Koin Annotations (with JSR-330), and what each definition gets with `get()`; `koinViewModel`, `koinInject` and `by inject()` uses. |
+| **Koin** | Modules and definitions (`single`, `factory`, `viewModel`, `singleOf(::X)`, `bind`), Koin Annotations (with JSR-330; an annotated class counts only in a package a module's `@ComponentScan` covers), and what each definition gets with `get()`; `koinViewModel`, `koinInject` and `by inject()` uses. |
 | **Manifest** | Permissions (including `tools:node="remove"`) and components from the source manifests, and, when a build has produced it, the merged manifest's permissions with the library that added each. |
 
 Kotlin and Java are read with the Kotlin compiler's own parser (the one detekt and ktlint use), on several threads.
@@ -257,13 +260,12 @@ Edge kinds: `depends_on`, `contains_entity`, `contains_dao`, `queries`, `writes`
 
 ## Limits
 
-droidmap is static and deliberately conservative. When it cannot resolve something (a route held in a variable, a version that is not a constant, a Koin definition whose type it cannot tell), it records it under `unresolved` instead of guessing, and the rules do not fire on it.
+droidmap reads the source and never runs Gradle. That is what makes it take seconds, work on a checkout nobody has built, and never run a project's build scripts; it also puts what only a build produces out of reach. And it is deliberately conservative: when it cannot resolve something (a route held in a variable, a version that is not a constant, a Koin definition whose type it cannot tell), it records it under `unresolved` instead of guessing, and the rules do not fire on it. A rule that guesses reports problems that are not there.
 
-- Generated code (KSP, kapt, Safe Args directions) is not read.
-- The merged manifest is read only when a build has produced it (`<module>/build/intermediates/merged_manifests/`); droidmap does not run Gradle. A merged manifest older than the build files is flagged as such.
-- Names resolve through imports, the same package and unique simple names, without type inference: two project classes with the same simple name and no import can be confused.
-- Navigation arguments built at runtime and `NavEntry` objects built by hand in Navigation 3 are not followed; helper functions are followed one level deep. Koin's `@ComponentScan` packages are not checked: with Koin Annotations, every annotated class counts as a definition.
-- `diff` maps changed lines to declarations; a change that only deletes a declaration shows as a change to what surrounds it.
+- Code a build generates (KSP, kapt) is not read. Safe Args does not need it: `HomeFragmentDirections.actionHomeToDetail()` is matched to its action by the names Safe Args gives the code it generates.
+- The permissions libraries add come from the resolved dependencies, so the merged manifest is read only when a build has produced it (`<module>/build/intermediates/merged_manifests/`, or the Action's `merge-manifest` input). A merged manifest older than the build files is flagged as such.
+- Names resolve by Kotlin's and Java's rules (imports, the package, enclosing classes and their supertypes), but without type inference, which needs the compiler and every dependency: a call on a variable, such as `repo.load()`, is not traced to the function it calls.
+- Values built at runtime are not followed: a route read from a `var`, or built in a loop. Constants, string templates, functions that return them and helpers up to five levels deep are.
 
 ## Contributing
 

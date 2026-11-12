@@ -33,10 +33,12 @@ import java.util.IdentityHashMap
 /** Marks an unknown part of an evaluated string (a template or call we could not resolve). */
 const val WILD = ''
 
-/** Name resolution over the project's own declarations: through imports, the package, enclosing classes and unique simple names. */
+/**
+ * Name resolution over the project's own declarations, by Kotlin's and Java's rules: imports (star imports
+ * too), the package, enclosing classes and the classes nested in their supertypes. Without type inference.
+ */
 class Index(sources: List<Source>) {
     val types = HashMap<String, Type>()
-    private val bySimple = HashMap<String, MutableList<Type>>()
     private val members = HashMap<String, MutableList<Decl>>()
     private val sourceByFile = IdentityHashMap<PsiFile, Source>()
     private val typeByPsi = IdentityHashMap<PsiElement, Type>()
@@ -49,10 +51,6 @@ class Index(sources: List<Source>) {
                 typeByPsi[t.psi] = t
                 val prev = types[t.fq]
                 if (prev == null || (prev.isExpect && !t.isExpect)) types[t.fq] = t // the first one, or an actual over its expect
-                if (t.kind != TypeKind.COMPANION) t.name?.let { n ->
-                    val same = bySimple.getOrPut(n) { ArrayList() }
-                    if (same.none { it.fq == t.fq }) same.add(t)
-                }
             }
             for (f in s.fns) {
                 fnByPsi[f.psi] = f
@@ -90,14 +88,20 @@ class Index(sources: List<Source>) {
         val suffix = if (rest.isEmpty()) "" else ".$rest"
         val cands = ArrayList<String>()
         src.imports[first]?.let { cands.add(it) }
-        for (t in typesAround(scope)) cands.add("${t.fq}.$first")
+        val around = typesAround(scope)
+        for (t in around) cands.add("${t.fq}.$first")
         cands.add(if (src.pkg.isEmpty()) first else "${src.pkg}.$first")
         src.starImports.forEach { cands.add("$it.$first") }
         for (c in cands) types[c + suffix]?.let { return it }
         if (first in src.imports) return null // imported from outside the project
-        val same = bySimple[first] ?: return null
-        if (same.size != 1) return null
-        return if (rest.isEmpty()) same[0] else types[same[0].fq + suffix]
+        // A class nested in a supertype of an enclosing class (class Sub : Base() { val x: Inner }).
+        for (t in around) for (sup in t.supers) {
+            val st = resolveType(sup.type.name, t.src, null) ?: continue
+            types["${st.fq}.$first$suffix"]?.let { return it }
+        }
+        // Anything else is not a project type: Kotlin and Java need an import for a class from another
+        // package, so a name without one is the standard library's (Result, Pair) or a library's.
+        return null
     }
 
     fun resolveMember(chain: String, src: Source, scope: PsiElement?): Decl? {

@@ -20,6 +20,9 @@ import org.jetbrains.kotlin.psi.KtDotQualifiedExpression
 import org.jetbrains.kotlin.psi.KtExpression
 import org.jetbrains.kotlin.psi.KtNameReferenceExpression
 import org.jetbrains.kotlin.psi.KtQualifiedExpression
+import org.jetbrains.kotlin.psi.KtWhenConditionIsPattern
+import org.jetbrains.kotlin.psi.KtWhenConditionWithExpression
+import org.jetbrains.kotlin.psi.KtWhenEntry
 import org.w3c.dom.Element
 import org.xml.sax.InputSource
 import java.io.StringReader
@@ -28,9 +31,16 @@ import javax.xml.parsers.DocumentBuilderFactory
 private val DEST_CALLS = setOf("composable", "dialog", "navigation", "bottomSheet", "activity", "entry")
 private val START_ARGS = setOf("startDestination", "startKey", "startRoute")
 private val BACKSTACK_STARTS = setOf("rememberNavBackStack", "NavBackStack")
+/** How many helpers deep a route is followed: onClick = { openItem(id) } -> openItem -> goTo -> navigate. */
+private const val MAX_HELPER_DEPTH = 5
 /** XML elements with an android:id that are not destinations. */
 private val NOT_DESTINATIONS = setOf("action", "argument", "deepLink", "include")
 private val R_ID = Regex("""^(?:[\w.]+\.)?R\.id\.(\w+)$""")
+/** A Safe Args call: `HomeFragmentDirections.actionHomeToDetail(...)`, also inside a chain such as `.setItemId(5)`. */
+private val DIRECTIONS = Regex("""\b([A-Z]\w*Directions)\s*\.\s*(\w+)\s*\(""")
+
+/** How Safe Args names generated code, compared without case or underscores: action_home_to_detail and actionHomeToDetail are one name. */
+private fun safeArgsKey(name: String) = name.replace("_", "").lowercase()
 const val ANDROID_NS = "http://schemas.android.com/apk/res/android"
 const val APP_NS = "http://schemas.android.com/apk/res-auto"
 const val TOOLS_NS = "http://schemas.android.com/tools"
@@ -97,6 +107,9 @@ class NavScan(private val p: Project, private val code: Code, private val g: Gra
     private val typeDests = LinkedHashMap<String, String>() // fq -> node id
     private val xmlIds = HashMap<String, String>()
     private val xmlActions = HashMap<String, String>()
+    /** Safe Args: the Directions class of each destination (by [safeArgsKey]) to its actions (by [safeArgsKey]) and their targets. */
+    private val directions = HashMap<String, HashMap<String, String>>()
+    private val actionsByKey = HashMap<String, MutableSet<String>>()
     private val pendingStarts = ArrayList<Pair<String, Call>>()
     private val files = code.sources.filter { !it.isTest }
 
@@ -104,6 +117,7 @@ class NavScan(private val p: Project, private val code: Code, private val g: Gra
         for (s in files) {
             if (!s.isKotlin || !s.importsFrom("androidx.navigation")) continue
             for (call in s.calls) if (call.name in DEST_CALLS && !call.isNew) destination(s, call)
+            if (s.importsFrom("androidx.navigation3")) handBuiltEntries(s)
         }
         xmlGraphs()
         menuItems()
@@ -148,13 +162,7 @@ class NavScan(private val p: Project, private val code: Code, private val g: Gra
         val common = mapOf("api" to api, "registered" to true, "graph" to flag(name == "navigation"), "dialog" to flag(name == "dialog"),
             "deep_link" to flag(deepLinks != null), "deep_link_uris" to deepLinkUris(deepLinks?.expr).ifEmpty { null })
         if (typeArg != null) {
-            val d = index.resolveType(typeArg.name, s, call.psi)
-            val fq = d?.fq ?: typeArg.name
-            nid = destId(fq)
-            g.addNode(nid, "nav_destination", fq.substringAfterLast('.'), d?.src?.path ?: s.path, d?.line ?: call.line,
-                d?.src?.module ?: s.module, mapOf("route" to fq, "style" to "type", "resolved" to flag(d != null), "end_line" to (d?.endLine ?: call.endLine)) + common)
-            typeDests[fq] = nid
-            if (d != null) nodeForClass(g, d, "nav_route")
+            nid = typedDestination(s, call, typeArg.name, common)
         } else {
             // navigation(startDestination, route) takes the route second.
             val arg = call.args.arg("route", if (name == "navigation") 1 else 0) ?: return
@@ -177,9 +185,46 @@ class NavScan(private val p: Project, private val code: Code, private val g: Gra
                 mapOf("route" to display(v), "style" to "string", "route_constant" to constant, "end_line" to call.endLine) + common)
             stringDests[v] = nid
         }
-        fnNode(call.fn)?.let { g.addEdge(it, nid, "registers", s.path, call.line) }
+        registered(s, call, nid)
         if (name == "navigation") pendingStarts.add(nid to call)
+    }
+
+    private fun registered(s: Source, call: Call, nid: String) {
+        fnNode(call.fn)?.let { g.addEdge(it, nid, "registers", s.path, call.line) }
         call.lambda?.let { screen(s, it, nid) }
+    }
+
+    /** The destination of a type route (`composable<Home>`, `entry<Home>`, or a NavEntry for Home). */
+    private fun typedDestination(s: Source, call: Call, typeName: String, common: Map<String, Any?>): String {
+        val d = index.resolveType(typeName, s, call.psi)
+        val fq = d?.fq ?: typeName
+        val nid = destId(fq)
+        g.addNode(nid, "nav_destination", fq.substringAfterLast('.'), d?.src?.path ?: s.path, d?.line ?: call.line,
+            d?.src?.module ?: s.module, mapOf("route" to fq, "style" to "type", "resolved" to flag(d != null), "end_line" to (d?.endLine ?: call.endLine)) + common)
+        typeDests[fq] = nid
+        if (d != null) nodeForClass(g, d, "nav_route")
+        return nid
+    }
+
+    /**
+     * Navigation 3 entries built by hand in an entry provider: `when (key) { is Home -> NavEntry(key) { HomeScreen() } }`,
+     * or `Home -> NavEntry(key) { ... }` for an object key. A branch that matches anything else (`else ->`) is not followed.
+     */
+    private fun handBuiltEntries(s: Source) {
+        for (call in s.calls) {
+            if (call.name != "NavEntry" || call.receiver != null || call.isNew) continue
+            val branch = PsiTreeUtil.getParentOfType(call.psi, KtWhenEntry::class.java) ?: continue
+            if (branch.expression?.textRange?.contains(call.psi.textRange) != true) continue
+            val key = branch.conditions.firstNotNullOfOrNull { c ->
+                when (c) {
+                    is KtWhenConditionIsPattern -> c.typeReference?.text?.takeIf { !c.isNegated }
+                    is KtWhenConditionWithExpression -> c.expression?.text
+                    else -> null
+                }
+            }?.filterNot { it.isWhitespace() }?.removeSuffix("?") ?: continue
+            if (!key.substringAfterLast('.').first().isUpperCase()) continue
+            registered(s, call, typedDestination(s, call, key, mapOf("api" to "nav3", "registered" to true)))
+        }
     }
 
     /** The URI of each `navDeepLink { uriPattern = ... }` or `navDeepLink<Route>(basePath = ...)` under [el], when it is a constant. */
@@ -209,7 +254,7 @@ class NavScan(private val p: Project, private val code: Code, private val g: Gra
 
     // ----- XML graphs -----
     /** An action or start destination in an XML graph: [from] (a destination id) to the XML id [target]. */
-    private class XmlLink(val rel: String, val from: String?, val action: String?, val target: String)
+    private class XmlLink(val rel: String, val from: String?, val action: String?, val target: String, val directions: String? = null, val pops: Boolean = false)
 
     private fun xmlGraphs() {
         val actions = ArrayList<XmlLink>()
@@ -217,7 +262,7 @@ class NavScan(private val p: Project, private val code: Code, private val g: Gra
         for (rel in p.navXmlPaths) {
             val root = readXml(p, g, rel, "nav_xml") ?: continue
             if (root.localName != "navigation" && root.tagName != "navigation") continue
-            xmlElement(root, rel, p.moduleOf(rel), actions, starts)
+            xmlElement(root, rel, p.moduleOf(rel), actions, starts, root = true)
         }
         // Linked once every file is read: an action can point into another graph file (<include>).
         for (a in actions) {
@@ -225,14 +270,31 @@ class NavScan(private val p: Project, private val code: Code, private val g: Gra
                 g.addNode(it, "nav_destination", "@id/${a.target}", a.rel, null, null,
                     mapOf("route" to "@id/${a.target}", "style" to "xml", "api" to "xml", "registered" to false))
             }
-            if (!a.action.isNullOrEmpty()) xmlActions[a.action] = tid
-            if (a.from != null) g.addEdge(a.from, tid, "navigates_to", a.rel, null, mapOf("action" to a.action?.ifEmpty { null }))
+            if (!a.action.isNullOrEmpty()) {
+                xmlActions[a.action] = tid
+                val key = safeArgsKey(a.action)
+                actionsByKey.getOrPut(key) { LinkedHashSet() }.add(tid)
+                a.directions?.let { directions.getOrPut(safeArgsKey(it)) { HashMap() }[key] = tid }
+            }
+            if (a.from != null) g.addEdge(a.from, tid, "navigates_to", a.rel, null, mapOf("action" to a.action?.ifEmpty { null }, "pops" to flag(a.pops)))
         }
         // A root graph without an id has no node: its start destination is marked instead.
         for (s in starts) xmlIds[s.target]?.let { if (s.from != null) g.addEdge(s.from, it, "starts_at", s.rel) else g.nodes.getValue(it).attrs["start"] = true }
     }
 
-    private fun xmlElement(el: Element, rel: String, module: String?, actions: MutableList<XmlLink>, starts: MutableList<XmlLink>) {
+    /**
+     * The class Safe Args generates for the actions of [el]: its class name (or else its id, or for a root
+     * graph without one, the file name) followed by Directions, as HomeFragmentDirections or NavGraphDirections.
+     */
+    private fun directionsClass(el: Element, rel: String, root: Boolean): String? {
+        val base = el.attr(ANDROID_NS, "name")?.substringAfterLast('.')?.substringAfterLast('$')
+            ?: (el.attr(ANDROID_NS, "id")?.substringAfter('/') ?: navGraphName(rel).takeIf { root })
+                ?.split('_')?.joinToString("") { it.replaceFirstChar(Char::uppercaseChar) }
+            ?: return null
+        return base + "Directions"
+    }
+
+    private fun xmlElement(el: Element, rel: String, module: String?, actions: MutableList<XmlLink>, starts: MutableList<XmlLink>, root: Boolean = false) {
         if (el.localName == "include") el.attr(APP_NS, "graph")?.let {
             g.addMeta("nav_includes", mapOf("from" to navGraphName(rel), "graph" to it.substringAfter('/')))
         }
@@ -254,8 +316,11 @@ class NavScan(private val p: Project, private val code: Code, private val g: Gra
         if (start != null) starts.add(XmlLink(rel, nid, null, start.substringAfter('/')))
         for (child in el.childElements()) {
             if (child.localName == "action") {
-                val target = child.attr(APP_NS, "destination") ?: continue
-                actions.add(XmlLink(rel, nid, child.attr(ANDROID_NS, "id")?.substringAfter('/'), target.substringAfter('/')))
+                // An action with only popUpTo goes back to that destination (unless it pops that one too).
+                val pops = child.attr(APP_NS, "destination") == null
+                val target = child.attr(APP_NS, "destination")
+                    ?: child.attr(APP_NS, "popUpTo")?.takeIf { child.attr(APP_NS, "popUpToInclusive") != "true" } ?: continue
+                actions.add(XmlLink(rel, nid, child.attr(ANDROID_NS, "id")?.substringAfter('/'), target.substringAfter('/'), directionsClass(el, rel, root), pops))
             } else {
                 xmlElement(child, rel, module, actions, starts)
             }
@@ -290,6 +355,7 @@ class NavScan(private val p: Project, private val code: Code, private val g: Gra
             val nid = xmlActions[key] ?: xmlIds[key]
             return if (nid != null) nid to null else null to "R.id.$key matches no navigation XML id"
         }
+        safeArgs(s, e)?.let { return it }
         val chain = (e as? KtExpression)?.let { typeChain(it) }
         if (chain != null && chain.substringAfterLast('.').firstOrNull()?.isUpperCase() == true) {
             val d = index.resolveType(chain, s, e)
@@ -316,6 +382,20 @@ class NavScan(private val p: Project, private val code: Code, private val g: Gra
         return null to "route is dynamic"
     }
 
+    /**
+     * A Safe Args action, `navigate(HomeFragmentDirections.actionHomeToDetail(id))`, also through a local
+     * (`val action = ...; navigate(action)`): the action's target in the XML graph, matched by the generated
+     * names. An action that only an enclosing graph has (a global action) is matched by its name alone, when
+     * that is unique. Null when [e] is not a Safe Args call.
+     */
+    private fun safeArgs(s: Source, e: PsiElement): Pair<String?, String?>? {
+        val m = DIRECTIONS.find(e.text) ?: plainName(e)?.let { n -> index.local(n, e)?.initializer?.text?.let { DIRECTIONS.find(it) } } ?: return null
+        val (cls, fn) = m.destructured
+        val key = safeArgsKey(fn)
+        val tid = directions[safeArgsKey(cls)]?.get(key) ?: actionsByKey[key]?.singleOrNull()
+        return if (tid != null) tid to null else null to "$cls.$fn() matches no navigation XML action"
+    }
+
     /** Functions that navigate to one of their own parameters: fun go(route: String) = navigate(route). */
     private class Helper(val fn: Fn, val param: String, val index: Int)
     private val helpers = ArrayList<Helper>()
@@ -329,11 +409,9 @@ class NavScan(private val p: Project, private val code: Code, private val g: Gra
             val arg = call.args.arg("route", 0) ?: call.args.arg("key") ?: call.args.arg("resId") ?: continue
             val (nid, reason) = target(s, arg.expr)
             if (nid == null) {
-                val fn = call.fn
-                val pname = plainName(arg.expr)
-                val pindex = fn?.params?.indexOfFirst { it.name == pname } ?: -1
-                if (fn != null && pname != null && pindex >= 0 && index.local(pname, call.psi) == null) {
-                    helpers.add(Helper(fn, pname, pindex))
+                val helper = passedOn(call, arg.expr)
+                if (helper != null) {
+                    helpers.add(helper)
                 } else if (navFile || (receiver != null && "nav" in receiver.lowercase())) {
                     g.addUnresolved("nav_target", arg.text.take(120), s.path, call.line, reason ?: "unknown")
                 }
@@ -350,23 +428,42 @@ class NavScan(private val p: Project, private val code: Code, private val g: Gra
         else -> null
     }
 
-    /** Calls to navigation helpers, resolved through the argument passed for the route parameter. */
+    /** A function that passes its parameter [e] on: (the function, the parameter's name, its position), or null. */
+    private fun passedOn(call: Call, e: PsiElement?): Helper? {
+        val fn = call.fn ?: return null
+        val pname = plainName(e) ?: return null
+        val pindex = fn.params.indexOfFirst { it.name == pname }
+        return if (pindex >= 0 && index.local(pname, call.psi) == null) Helper(fn, pname, pindex) else null
+    }
+
+    /**
+     * Calls to navigation helpers, resolved through the argument passed for the route parameter. A helper
+     * that passes its own parameter to another helper is a helper too, followed up to [MAX_HELPER_DEPTH] levels.
+     */
     private fun helperCalls() {
-        if (helpers.isEmpty()) return
-        val byName = helpers.groupBy { it.fn.name }
-        for (s in files) for (call in s.calls) {
-            val hs = byName[call.name] ?: continue
-            if (call.isNew) continue
-            val callee = index.resolveMember(call.name, s, call.psi) as? Fn
-            val h = hs.firstOrNull { it.fn === callee } ?: hs.singleOrNull() ?: continue
-            if (call.fn === h.fn) continue
-            val arg = call.args.arg(h.param, h.index) ?: continue
-            val (nid, reason) = target(s, arg.expr)
-            if (nid == null) {
-                g.addUnresolved("nav_target", "${call.name}(${arg.text.take(100)})", s.path, call.line, reason ?: "unknown")
-                continue
+        val seen = helpers.mapTo(HashSet()) { it.fn }
+        var level: List<Helper> = helpers
+        var depth = 0
+        while (level.isNotEmpty() && depth++ < MAX_HELPER_DEPTH) {
+            val byName = level.groupBy { it.fn.name }
+            val next = ArrayList<Helper>()
+            for (s in files) for (call in s.calls) {
+                val hs = byName[call.name] ?: continue
+                if (call.isNew) continue
+                val callee = index.resolveMember(call.name, s, call.psi) as? Fn
+                val h = hs.firstOrNull { it.fn === callee } ?: hs.singleOrNull() ?: continue
+                if (call.fn === h.fn) continue
+                val arg = call.args.arg(h.param, h.index) ?: continue
+                val (nid, reason) = target(s, arg.expr)
+                if (nid == null) {
+                    val outer = passedOn(call, arg.expr)
+                    if (outer != null) { if (seen.add(outer.fn)) next.add(outer) }
+                    else g.addUnresolved("nav_target", "${call.name}(${arg.text.take(100)})", s.path, call.line, reason ?: "unknown")
+                    continue
+                }
+                fnNode(call.fn)?.let { g.addEdge(it, nid, "navigates_to", s.path, call.line, mapOf("via" to h.fn.name)) }
             }
-            fnNode(call.fn)?.let { g.addEdge(it, nid, "navigates_to", s.path, call.line, mapOf("via" to h.fn.name)) }
+            level = next
         }
     }
 

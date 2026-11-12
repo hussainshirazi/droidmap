@@ -3,7 +3,11 @@
 ## 0.2.0 (2026-11-12)
 
 - `diff`: what a change touches. It maps the changed lines (since `--base`, by default the uncommitted changes) onto the innermost declarations around them and lists what depends on those: screens, destinations, ViewModels, Room, bindings, modules and tests, with the findings in the changed files. The GitHub Action posts it on each pull request and keeps one comment updated; the MCP server has `droidmap_diff`.
+- `diff` lists the declarations a change removes (from the base commit's code, read only for the changed files) and what still depended on them.
 - `diff --format tasks` (or `modules`): the test tasks of the modules a change can break, for running only those in CI, without running Gradle.
+- Navigation: Safe Args directions (`HomeFragmentDirections.actionHomeToDetail(id)`, also through a local and in Java) are matched to their XML actions; Navigation 3 `NavEntry(key)` built in a `when` over the keys; helpers followed up to five levels deep; an action with only `popUpTo` goes back to that destination.
+- Koin Annotations: an annotated class counts as a definition only in a package a module's `@ComponentScan` covers (unless the build sets `KOIN_DEFAULT_MODULE`), and `koin-missing-definition` says when a class is missing only because no scan covers it.
+- The GitHub Action's `merge-manifest` input runs `processReleaseMainManifest` (or a task you name) first, so the permissions libraries add are checked too.
 - A page per rule (`docs/rules/`), shown by `droidmap explain <rule>` and the MCP tool `droidmap_explain`, linked from code scanning alerts (SARIF help) and the pull request comment.
 - New rules: `hilt-app-not-registered` (`@AndroidEntryPoint` classes, but the manifest's Application is not the `@HiltAndroidApp` one: a crash when they open), `workmanager-setup` (a `@HiltWorker` without `HiltWorkerFactory`, or a `Configuration.Provider` the default initializer bypasses) and `nav-deeplink-not-in-manifest` (a deep link no intent filter accepts).
 - A Claude Code plugin (`/plugin install droidmap --marketplace hussainshirazi/droidmap`) with the MCP server and a skill; a Docker image on ghcr.io for other CI systems and Docker-based MCP clients; an entry in the MCP Registry. Releases publish all three.
@@ -17,6 +21,7 @@
 - `init` writes the GitHub workflow and the MCP config (`.mcp.json`, and Cursor's or VS Code's when their folder exists), never changing a file that exists.
 - Easier to use: droidmap finds the project from any folder inside it, and says so instead of reporting "No findings." outside a Gradle project. Terminal output is in colour (`NO_COLOR`, `FORCE_COLOR`), long messages wrap, `find` and `show` drop internal ids and attributes, and `impact` lines up its columns.
 - Faster: files are parsed on several threads, the MCP server reparses only changed files, version catalogs are read without a TOML library, and the installers start the JVM for short runs.
+- Fixed: a name without an import could resolve to a project class of another package with the same simple name (your own `Result` for Kotlin's), which could report a missing binding that was not missing; names now resolve by Kotlin's and Java's rules. A Koin definition's constructor parameters were resolved in the module's file instead of the class's.
 - Fixed: the start destination of a root `<navigation>` without an id, and `<deepLink android:id>`, showed as unreachable; a `@ColumnInfo` name or `@Embedded` prefix that cannot be read (such as `BaseColumns._ID`) made a schema look stale; Hilt rules ran on projects that only have Dagger leftovers in tests.
 
 ## 0.1.0 (2026-11-11)

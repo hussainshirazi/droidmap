@@ -5,6 +5,7 @@ import droidmap.Code
 import droidmap.Fn
 import droidmap.Graph
 import droidmap.Param
+import droidmap.Project
 import droidmap.Source
 import droidmap.Type
 import droidmap.TypeRef
@@ -28,6 +29,7 @@ private val NOT_INJECTED = setOf("InjectedParam", "Property", "Provided")
 
 private fun injected(p: Param) = p.anns.none { it.name in NOT_INJECTED }
 private val USES = setOf("get", "inject", "koinInject")
+private val STRING = Regex(""""([\w.]*)"""")
 
 fun koinModuleId(key: String) = "koin.module::$key"
 
@@ -37,12 +39,14 @@ fun koinModuleId(key: String) = "koin.module::$key"
  * Mapped onto the same edges as Hilt: a provided type is `bound_by` its definition, a class `injects` what
  * its constructor gets, with a `koin` attribute so the Koin rule can tell them apart.
  */
-class KoinScan(private val code: Code, private val g: Graph) {
+class KoinScan(private val p: Project, private val code: Code, private val g: Graph) {
     private val index = code.index
+    /** The packages @ComponentScan covers, or null when every annotated class counts (see [scans]). */
+    private var scanned: List<String>? = null
 
     fun run() {
-        // With Koin Annotations, annotated classes anywhere in the project are definitions (found by @ComponentScan).
         val annotations = code.sources.any { it.importsFrom("org.koin.core.annotation") }
+        if (annotations) scanned = scans()
         for (s in code.sources) {
             if (annotations) {
                 for (t in s.types) annotatedClass(t)
@@ -122,7 +126,14 @@ class KoinScan(private val code: Code, private val g: Graph) {
             if (c.name != "get" || c.receiver != null) continue
             val at = ctorArgs.indexOfFirst { it.expr === c.psi }
             val param = if (at >= 0) ctorArgs[at].name?.let { n -> params.firstOrNull { it.name == n } } ?: params.getOrNull(at) else null
-            val dep = type(c.typeArgs.firstOrNull() ?: c.assignedTo?.type ?: param?.type, s, c.psi) ?: continue
+            // Each type is resolved in the file it is written in: a parameter's in its class's file.
+            val assigned = c.assignedTo
+            val dep = when {
+                c.typeArgs.isNotEmpty() -> type(c.typeArgs.first(), s, c.psi)
+                assigned?.type != null -> type(assigned.type, assigned.src, assigned.psi)
+                param != null -> type(param.type, param.src, param.psi)
+                else -> null
+            } ?: continue
             if (param != null && made != null) g.addEdge(classId(made.fq), classNode(dep), "injects", s.path, c.line, koin)
             else g.addEdge(did, classNode(dep), "requires", s.path, c.line, koin)
         }
@@ -163,9 +174,38 @@ class KoinScan(private val code: Code, private val g: Graph) {
         return out
     }
 
+    /**
+     * With Koin Annotations, an annotated class is a definition only in a package that a module's
+     * @ComponentScan covers: its argument (`@ComponentScan("com.x.data")`), or else the module's own package,
+     * and the packages under them. Null (every annotated class counts) when nothing has @ComponentScan, or the
+     * build turns on KOIN_DEFAULT_MODULE, which puts the classes no scan finds in a default module.
+     */
+    private fun scans(): List<String>? {
+        val out = ArrayList<String>()
+        for (s in code.sources) for (t in s.types) {
+            val scan = t.anns.find("ComponentScan") ?: continue
+            val named = STRING.findAll(scan.text ?: "").map { it.groupValues[1] }.toList()
+            out += named.ifEmpty { listOf(s.pkg) }
+        }
+        if (out.isEmpty() || p.gradlePaths.any { "KOIN_DEFAULT_MODULE" in p.read(it) }) return null
+        return out.distinct()
+    }
+
+    private fun isScanned(t: Type): Boolean {
+        val pkgs = scanned ?: return true
+        val pkg = t.src.pkg
+        return pkgs.any { it.isEmpty() || pkg == it || pkg.startsWith("$it.") }
+    }
+
     /** `@Single class Repo(dao: Dao) : Store` (or an @Inject constructor): an injectable bound to its supertypes and to `binds = [...]`. */
     private fun annotatedClass(t: Type) {
         val ann = t.anns.firstOrNull { it.name in ANNOTATED } ?: t.ctors.firstOrNull { it.anns.has("Inject") }?.anns?.find("Inject") ?: return
+        if (!isScanned(t)) {
+            // Koin never sees it: anything that gets it (or a supertype only it provides) fails at runtime.
+            g.addMeta("koin_unscanned", mapOf("class" to t.fq, "annotation" to ann.name, "package" to t.src.pkg,
+                "supertypes" to t.supers.mapNotNull { type(it.type, t.src, t.psi)?.fq }, "file" to t.src.path, "line" to t.line))
+            return
+        }
         val cid = nodeForClass(g, t, "injectable", mapOf("koin" to true))
         if (ann.name == "KoinViewModel") nodeForClass(g, t, "viewmodel")
         val supers = t.supers.mapNotNull { type(it.type, t.src, t.psi) } + ann.args.flatMap { classRefs(it.psi) }.mapNotNull { (n, at) -> index.resolveType(n, t.src, at) }

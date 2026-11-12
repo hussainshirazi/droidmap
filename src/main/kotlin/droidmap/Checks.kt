@@ -217,13 +217,27 @@ private fun deepLinks(g: Graph): List<Finding> {
 // ----- Hilt and Koin -----
 private fun di(g: Graph): List<Finding> {
     val out = ArrayList<Finding>()
+    // Koin Annotations classes outside every @ComponentScan, by the class and by each supertype they would provide.
+    val unscanned = HashMap<String, Map<String, Any?>>()
+    for (u in g.meta.maps("koin_unscanned")) {
+        unscanned.putIfAbsent(u.str("class") ?: continue, u)
+        for (sup in u["supertypes"] as? List<*> ?: emptyList<Any>()) unscanned.putIfAbsent(sup.toString(), u)
+    }
     for (e in g.edges) {
         if ((e.kind != "injects" && e.kind != "requires") || e.attrs.bool("constructs")) continue // a Koin definition makes what it constructs
         val t = g.nodes[e.target] ?: continue
         if (t.file == null) continue // not a project class
         if (t.roles.any { it in setOf("injectable", "viewmodel", "hilt_module") } || t.attrs.bool("assisted_factory")) continue
         if (g.outEdges(t.id).any { it.kind == "bound_by" }) continue
-        out.add(if (e.attrs.bool("koin")) {
+        val u = unscanned[t.id.removePrefix("class::")]
+        out.add(if (e.attrs.bool("koin") && u != null) {
+            val cls = u.str("class")!!.substringAfterLast('.')
+            val who = "$cls (@${u.str("annotation")})" + if (cls == t.label) "" else ", which would provide it,"
+            finding(Rule.KOIN_MISSING_DEFINITION,
+                "${g.label(e.source)} gets ${t.label} from Koin, but $who is in ${u.str("package")?.ifEmpty { "the default package" }}, " +
+                    "which no @ComponentScan covers, so Koin never defines it (NoDefinitionFoundException at runtime): " +
+                    "add the package to a module's @ComponentScan", e.file, e.line, t.id)
+        } else if (e.attrs.bool("koin")) {
             finding(Rule.KOIN_MISSING_DEFINITION,
                 "${g.label(e.source)} gets ${t.label} from Koin, but no Koin definition provides it (NoDefinitionFoundException " +
                     "at runtime)" + hint(g, "koin_definition", "Koin definitions"), e.file, e.line, t.id)

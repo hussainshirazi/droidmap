@@ -16,4 +16,12 @@ val dataModule = module {
 }
 ```
 
-With Koin Annotations, annotate the class (`@Single`, `@Factory`, `@KoinViewModel`). Koin's own `verify()` in a unit test catches the same mistakes at test time.
+With Koin Annotations, annotate the class (`@Single`, `@Factory`, `@KoinViewModel`), in a package that a module's `@ComponentScan` covers: `@ComponentScan("com.example.data")` covers that package and the ones under it, and `@ComponentScan` with no argument the module's own package. An annotated class outside every scanned package is never defined, and the finding says so:
+
+```kotlin
+@Module
+@ComponentScan("com.example.data", "com.example.feature")
+class AppModule
+```
+
+Koin's own `verify()` in a unit test catches the same mistakes at test time.

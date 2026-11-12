@@ -57,6 +57,7 @@ jobs:
           fail-on: never
           upload-sarif: "false"
           comment: "false"
+          merge-manifest: "true" # the sample has no Gradle wrapper: a warning, and the check still runs
       - name: SARIF paths point into the repository
         shell: bash
         run: |
