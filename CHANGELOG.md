@@ -6,6 +6,7 @@
 - `diff --format tasks` (or `modules`): the test tasks of the modules a change can break, for running only those in CI, without running Gradle.
 - A page per rule (`docs/rules/`), shown by `droidmap explain <rule>` and the MCP tool `droidmap_explain`, linked from code scanning alerts (SARIF help) and the pull request comment.
 - New rules: `hilt-app-not-registered` (`@AndroidEntryPoint` classes, but the manifest's Application is not the `@HiltAndroidApp` one: a crash when they open), `workmanager-setup` (a `@HiltWorker` without `HiltWorkerFactory`, or a `Configuration.Provider` the default initializer bypasses) and `nav-deeplink-not-in-manifest` (a deep link no intent filter accepts).
+- A Claude Code plugin (`/plugin install droidmap --marketplace hussainshirazi/droidmap`) with the MCP server and a skill; a Docker image on ghcr.io for other CI systems and Docker-based MCP clients; an entry in the MCP Registry. Releases publish all three.
 - CI runs droidmap on four open-source apps at fixed commits and fails when their findings change; Dependabot keeps the Kotlin parser current.
 - Java: Java sources are read through the same model as Kotlin, so Room (entities, DAOs, migrations, migration tests, schema columns), Hilt, `navigate(R.id.x)` and `new ViewModelProvider(this).get(X.class)` work in Java code.
 - Koin: DSL definitions (`single`, `factory`, `viewModel`, `singleOf(::X)`, `bind`), Koin Annotations (with JSR-330), `get()`/`inject()`/`koinInject()` uses, and the `koin-missing-definition` rule.

@@ -1,0 +1,19 @@
+{
+  "name": "droidmap",
+  "owner": {
+    "name": "hussainshirazi"
+  },
+  "metadata": {
+    "description": "droidmap for Claude Code: Android project structure, checks and change impact"
+  },
+  "plugins": [
+    {
+      "name": "droidmap",
+      "source": "./plugin",
+      "description": "The droidmap MCP server and a skill that tells Claude when to use it: what depends on an entity, route, ViewModel, binding or module before changing it, and Android checks (Room migrations, navigation, Hilt, Koin, WorkManager, Gradle modules, permissions) after.",
+      "homepage": "https://github.com/hussainshirazi/droidmap",
+      "license": "Apache-2.0",
+      "category": "development"
+    }
+  ]
+}

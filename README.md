@@ -37,6 +37,8 @@ irm https://raw.githubusercontent.com/hussainshirazi/droidmap/main/install.ps1 |
 
 Homebrew: `brew tap hussainshirazi/droidmap https://github.com/hussainshirazi/droidmap` then `brew install droidmap`. Scoop: `scoop bucket add droidmap https://github.com/hussainshirazi/droidmap` then `scoop install droidmap/droidmap`.
 
+Docker, for CI systems other than GitHub Actions (GitLab, Bitbucket, Jenkins, Bitrise): `docker run --rm -v "$PWD":/project ghcr.io/hussainshirazi/droidmap check` (from version 0.2.0).
+
 Or download `droidmap.jar` from the [latest release](../../releases/latest) and run `java -jar droidmap.jar`. droidmap needs Java 17 or newer. The `droidmap` command uses `JAVA_HOME`, the `java` on your PATH, or else the Java that Android Studio brings, so with Android Studio installed there is nothing to set up. The jar is about 65 MB because it carries the Kotlin compiler's parser.
 
 ## Quick start
@@ -122,17 +124,25 @@ Findings show up as code scanning alerts, as notes on the changed lines and in t
 
 `droidmap mcp` is a [Model Context Protocol](https://modelcontextprotocol.io) server over stdio. It rebuilds the graph when a file changes (parsing only the changed files), so its answers follow the code as the agent edits it.
 
-`droidmap init` writes `.mcp.json` (Claude Code), and `.cursor/mcp.json` or `.vscode/mcp.json` when those folders exist; commit them and everyone on the team gets the server. It never changes a file that exists: it prints what to add instead. To set it up by hand in Claude Code:
+**Claude Code plugin** (the server plus a skill that tells Claude when to use it: impact before changing an entity, route or binding, checks and the tests to run after):
+
+```
+/plugin install droidmap --marketplace hussainshirazi/droidmap
+```
+
+On Claude Code before 2.1.275, add the marketplace first: `/plugin marketplace add hussainshirazi/droidmap`, then `/plugin install droidmap@droidmap`. The skill is a plain [SKILL.md](plugin/skills/droidmap/SKILL.md); other agents that read skills can use the same file.
+
+**Any MCP client.** `droidmap init` writes `.mcp.json` (Claude Code), and `.cursor/mcp.json` or `.vscode/mcp.json` when those folders exist; commit them and everyone on the team gets the server. It never changes a file that exists: it prints what to add instead. By hand:
 
 ```sh
 claude mcp add droidmap -- droidmap mcp .
 ```
 
-Cursor, VS Code, Windsurf and other clients take the same command in their MCP config (`"command": "java", "args": ["-jar", "/path/to/droidmap.jar", "mcp", "."]` works without installing):
-
 ```json
 { "mcpServers": { "droidmap": { "command": "droidmap", "args": ["mcp", "."] } } }
 ```
+
+Without installing anything but Java: `"command": "java", "args": ["-jar", "/path/to/droidmap.jar", "mcp", "."]`. With Docker: `"command": "docker", "args": ["run", "--rm", "-i", "-v", "/path/to/project:/project", "ghcr.io/hussainshirazi/droidmap", "mcp"]`. droidmap is also listed in the [MCP Registry](https://registry.modelcontextprotocol.io) as `io.github.hussainshirazi/droidmap` (from version 0.2.0).
 
 | Tool | Use it to |
 |---|---|

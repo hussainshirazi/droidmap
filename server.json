@@ -1,0 +1,43 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.hussainshirazi/droidmap",
+  "title": "droidmap",
+  "description": "Android project graph: change impact and checks for Room, navigation, Hilt, Koin and Gradle",
+  "version": "0.2.0",
+  "repository": {
+    "url": "https://github.com/hussainshirazi/droidmap",
+    "source": "github"
+  },
+  "websiteUrl": "https://github.com/hussainshirazi/droidmap",
+  "packages": [
+    {
+      "registryType": "oci",
+      "identifier": "ghcr.io/hussainshirazi/droidmap:0.2.0",
+      "transport": {
+        "type": "stdio"
+      },
+      "runtimeHint": "docker",
+      "runtimeArguments": [
+        {
+          "type": "named",
+          "name": "--volume",
+          "value": "{project_dir}:/project",
+          "description": "The Android project to analyze, mounted where droidmap reads it",
+          "variables": {
+            "project_dir": {
+              "description": "Absolute path of the Android project's root folder",
+              "format": "filepath",
+              "isRequired": true
+            }
+          }
+        }
+      ],
+      "packageArguments": [
+        {
+          "type": "positional",
+          "value": "mcp"
+        }
+      ]
+    }
+  ]
+}
