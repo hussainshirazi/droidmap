@@ -25,7 +25,7 @@ jobs:
           java-version: "17"
       - uses: gradle/actions/setup-gradle@v4
       - run: chmod +x gradlew && ./gradlew fatJar
-      - uses: actions/cache@v4
+      - uses: actions/cache@v6
         with:
           path: ${{ runner.temp }}/droidmap-realworld
           key: realworld-${{ hashFiles('realworld/projects.txt') }}
