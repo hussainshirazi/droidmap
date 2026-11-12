@@ -8,7 +8,9 @@
 - Kotlin Multiplatform: dependencies in `commonTest`-style source sets are test dependencies; an `expect` class and its `actual`s are one type.
 - Merged manifest: when a build has produced it, its permissions are checked against `allowed_permissions` too, with the library that added each.
 - `report` draws the module graph and the screen flow (Mermaid, rendered on GitHub) and lists Koin definitions and permissions.
-- Install with a script (`install.sh`, `install.ps1`), Homebrew or Scoop; releases publish a checksum.
+- Install with a script (`install.sh`, `install.ps1`), Homebrew or Scoop; releases publish a checksum. The `droidmap` command finds Android Studio's Java when there is no `JAVA_HOME` or `java` on the PATH.
+- `init` writes the GitHub workflow and the MCP config (`.mcp.json`, and Cursor's or VS Code's when their folder exists), never changing a file that exists.
+- Easier to use: droidmap finds the project from any folder inside it, and says so instead of reporting "No findings." outside a Gradle project. Terminal output is in colour (`NO_COLOR`, `FORCE_COLOR`), long messages wrap, `find` and `show` drop internal ids and attributes, and `impact` lines up its columns.
 - Faster: files are parsed on several threads, the MCP server reparses only changed files, version catalogs are read without a TOML library, and the installers start the JVM for short runs.
 - Fixed: the start destination of a root `<navigation>` without an id, and `<deepLink android:id>`, showed as unreachable; a `@ColumnInfo` name or `@Embedded` prefix that cannot be read (such as `BaseColumns._ID`) made a schema look stale; Hilt rules ran on projects that only have Dagger leftovers in tests.
 

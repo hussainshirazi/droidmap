@@ -28,18 +28,33 @@ if curl -fsSL --retry 3 -o "$home/droidmap.jar.sha256" "$url/droidmap.jar.sha256
 fi
 mv "$home/droidmap.jar.part" "$home/droidmap.jar"
 
-cat > "$bin/droidmap" <<EOF
+cat > "$bin/droidmap" <<'EOF'
 #!/bin/sh
-# droidmap: runs the jar with \$JAVA_HOME's java, or the one on the PATH (Java 17 or newer).
+# droidmap: runs the jar with Java 17 or newer: $JAVA_HOME's, the one on the PATH, or the one
+# Android Studio brings (so a machine with Android Studio needs no Java setup).
+java=""
+if [ -n "${JAVA_HOME:-}" ] && [ -x "$JAVA_HOME/bin/java" ]; then
+  java="$JAVA_HOME/bin/java"
+elif command -v java > /dev/null 2>&1; then
+  java=java
+else
+  for d in "/Applications/Android Studio.app/Contents/jbr/Contents/Home" "$HOME/Applications/Android Studio.app/Contents/jbr/Contents/Home" \
+           "$HOME/android-studio/jbr" /opt/android-studio/jbr /usr/local/android-studio/jbr /snap/android-studio/current/android-studio/jbr; do
+    if [ -x "$d/bin/java" ]; then java="$d/bin/java"; break; fi
+  done
+fi
+if [ -z "$java" ]; then
+  echo "droidmap needs Java 17 or newer: install Android Studio or a JDK, or set JAVA_HOME." >&2
+  exit 2
+fi
 # A short run starts faster with only the quick JIT compiler and the serial GC.
-exec "\${JAVA_HOME:+\$JAVA_HOME/bin/}java" -XX:TieredStopAtLevel=1 -XX:+UseSerialGC -jar "$home/droidmap.jar" "\$@"
+exec "$java" -XX:TieredStopAtLevel=1 -XX:+UseSerialGC -jar "__HOME__/droidmap.jar" "$@"
 EOF
+sed "s|__HOME__|$home|" "$bin/droidmap" > "$bin/droidmap.new" && mv "$bin/droidmap.new" "$bin/droidmap"
 chmod +x "$bin/droidmap"
 
 echo "Installed $bin/droidmap"
-if ! "$bin/droidmap" --version 2>/dev/null; then
-  echo "droidmap needs Java 17 or newer: set JAVA_HOME (Android Studio has one in its jbr folder) or put java on your PATH."
-fi
+"$bin/droidmap" --version || true
 case ":$PATH:" in
   *":$bin:"*) ;;
   *) echo "Add $bin to your PATH to run droidmap from anywhere." ;;

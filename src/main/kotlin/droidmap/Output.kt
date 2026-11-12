@@ -2,16 +2,22 @@ package droidmap
 
 fun plural(n: Int, word: String) = if (n == 1) word else "${word}s"
 
-fun formatFindings(findings: List<Finding>): String {
-    if (findings.isEmpty()) return "No findings."
+private const val MESSAGE_INDENT = 8
+private const val LINE_WIDTH = 100
+
+/** Findings as two or more lines each: severity, rule and place, then the message wrapped under them. */
+fun formatFindings(findings: List<Finding>, style: Style = Style.PLAIN): String {
+    if (findings.isEmpty()) return style.green("No findings.")
     val lines = ArrayList<String>()
+    val indent = " ".repeat(MESSAGE_INDENT)
     for (f in findings) {
-        lines.add("${f.severity.padEnd(7)} ${f.rule.padEnd(28)} ${location(f.file, f.line, none = "-")}\n        ${f.message}")
+        lines.add("${style.severity(f.severity, f.severity.padEnd(7))} ${style.bold(f.rule.padEnd(28))} ${style.dim(location(f.file, f.line, none = "-"))}")
+        wrapText(f.message, LINE_WIDTH - MESSAGE_INDENT).forEach { lines.add(indent + it) }
     }
     val counts = findings.groupingBy { it.severity }.eachCount()
     lines.add("")
     lines.add(listOf("error", "warning", "info").filter { (counts[it] ?: 0) > 0 }
-        .joinToString(", ") { "${counts[it]} ${plural(counts.getValue(it), it)}" })
+        .joinToString(", ") { style.severity(it, "${counts[it]} ${plural(counts.getValue(it), it)}") })
     return lines.joinToString("\n")
 }
 

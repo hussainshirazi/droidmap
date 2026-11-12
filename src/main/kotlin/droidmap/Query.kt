@@ -113,18 +113,31 @@ fun location(file: String?, line: Int?, none: String = ""): String = if (file ==
 
 private fun loc(file: String?, line: Int?) = location(file, line, none = "no file")
 
-/** One line per node, as find prints them. */
-fun formatFind(hits: List<Node>): String = hits.joinToString("\n") { "${it.id}  [${it.kind}]  ${location(it.file, it.line)}" }
+/** One line per node, as find prints them; the id is added only for a name that more than one node has. */
+fun formatFind(hits: List<Node>, style: Style = Style.PLAIN): String {
+    if (hits.isEmpty()) return ""
+    val ambiguous = hits.groupingBy { it.label }.eachCount().filterValues { it > 1 }.keys
+    val width = hits.maxOf { it.label.length }
+    val kindWidth = hits.maxOf { it.kind.length }
+    return hits.joinToString("\n") {
+        val id = if (it.label in ambiguous) "  ${it.id}" else ""
+        "${style.bold(it.label.padEnd(width))}  ${it.kind.padEnd(kindWidth)}  ${style.dim(location(it.file, it.line))}$id"
+    }
+}
 
-fun formatImpact(r: Impact, limit: Int = 200): String {
+fun formatImpact(r: Impact, limit: Int = 200, style: Style = Style.PLAIN): String {
     val n = r.node
-    val lines = arrayListOf("Impact of ${n.label} [${n.kind}] (${loc(n.file, n.line)})", "")
+    val lines = arrayListOf("${style.bold(n.label)} ${n.kind}  ${style.dim(loc(n.file, n.line))}", "")
     if (r.dependents.isEmpty()) {
         lines.add("Nothing in the graph depends on it.")
     } else {
-        lines.add("${r.dependents.size} dependents, nearest first (depth, dependent, how it depends; depth <= ${r.depth}):")
-        for (x in r.dependents.take(limit)) {
-            lines.add("  ${x.depth}  ${x.label} [${x.kind}] ${x.via} ${x.throughLabel}  ${loc(x.file, x.line)}")
+        val shown = r.dependents.take(limit)
+        lines.add("${r.dependents.size} ${plural(r.dependents.size, "dependent")}, nearest first (depth <= ${r.depth}):")
+        val labelWidth = shown.maxOf { it.label.length }
+        val kindWidth = shown.maxOf { it.kind.length }
+        for (x in shown) {
+            lines.add("  ${x.depth}  ${style.bold(x.label.padEnd(labelWidth))}  ${x.kind.padEnd(kindWidth)}  ${x.via} ${x.throughLabel}  " +
+                style.dim(loc(x.file, x.line)))
         }
         if (r.dependents.size > limit) lines.add("  ... ${r.dependents.size - limit} more")
     }
@@ -134,22 +147,33 @@ fun formatImpact(r: Impact, limit: Int = 200): String {
     return lines.joinToString("\n")
 }
 
-/** An attribute value as text: a string as it is, anything else as compact JSON. */
-private fun plain(v: Any?): String = if (v is String) v else jsonText(v, pretty = false)
+/** An attribute value as text: a string as it is, a list as its items, anything else as compact JSON. */
+private fun plain(v: Any?): String = when (v) {
+    is String -> v
+    is List<*> -> v.joinToString(", ") { plain(it) }
+    else -> jsonText(v, pretty = false)
+}
 
-fun formatShow(s: Shown): String {
+/** Attributes that only matter to the tools reading graph.json. */
+private val INTERNAL_ATTRS = setOf("roles", "end_line", "source_set")
+
+fun formatShow(s: Shown, style: Style = Style.PLAIN): String {
     val n = s.node
-    val lines = arrayListOf("${n.label} [${n.kind}]  ${n.id}", "  at ${loc(n.file, n.line)}")
-    val attrs = n.attrs.filter { (k, v) -> k != "roles" && v != null && v != emptyList<Any>() && v != emptyMap<String, Any>() }.toSortedMap()
-    if (n.roles.size > 1) attrs["roles"] = n.roles
+    val lines = arrayListOf("${style.bold(n.label)} ${n.kind}  ${style.dim(loc(n.file, n.line))}")
+    val attrs = n.attrs.filter { (k, v) -> k !in INTERNAL_ATTRS && v != null && v != emptyList<Any>() && v != emptyMap<String, Any>() }.toSortedMap()
+    val also = n.roles.filter { it != n.kind }
+    if (also.isNotEmpty()) attrs["also"] = also
     for ((k, v) in attrs) lines.add("  $k: ${plain(v)}")
     for ((title, list) in listOf("Depends on" to s.dependsOn, "Used by" to s.usedBy)) {
         if (list.isEmpty()) continue
+        lines.add("")
         lines.add("$title:")
-        for (x in list.sortedWith(compareBy({ it.kind }, { it.label }))) {
+        val sorted = list.sortedWith(compareBy({ it.kind }, { it.label }))
+        val width = sorted.maxOf { it.label.length }
+        for (x in sorted) {
             val extra = x.attrs.toSortedMap().filter { (_, v) -> v != null && v != "" && v != emptyList<Any>() }
                 .entries.joinToString("") { " ${it.key}=${plain(it.value)}" }
-            lines.add("  ${x.kind.padEnd(16)} ${x.label} [${x.nodeKind}]$extra  ${loc(x.file, x.line)}")
+            lines.add("  ${x.kind.padEnd(16)} ${style.bold(x.label.padEnd(width))}  ${x.nodeKind}$extra  ${style.dim(loc(x.file, x.line))}")
         }
     }
     return lines.joinToString("\n")

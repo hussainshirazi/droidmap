@@ -33,6 +33,9 @@ object Git {
     fun untracked(root: Path): List<String> =
         text(root, "ls-files", "--others", "--exclude-standard", "-z")?.split('\u0000')?.filter { it.isNotEmpty() } ?: emptyList()
 
+    /** The top folder of the repository that holds [root], or null outside git. */
+    fun topLevel(root: Path): Path? = text(root, "rev-parse", "--show-toplevel")?.trim()?.ifEmpty { null }?.let { Path.of(it).toAbsolutePath().normalize() }
+
     /** Whether [ref] names a commit in the repository that holds [root]. */
     fun isCommit(root: Path, ref: String): Boolean =
         !ref.startsWith("-") && run(root, "rev-parse", "--verify", "--quiet", "$ref^{commit}").first == 0

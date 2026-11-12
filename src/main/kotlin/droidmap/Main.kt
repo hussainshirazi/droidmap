@@ -13,7 +13,10 @@ private val USAGE = """
     droidmap $VERSION: an Android-aware project graph for developers and AI agents.
 
     Usage: droidmap <command> [options]
+    Start here, from anywhere inside your project: `droidmap init` sets up CI and AI agents,
+    `droidmap check` finds problems, `droidmap diff` shows what your changes touch.
 
+      init   [path]                                write the GitHub workflow and MCP config (never overwrites)
       build  [path] [-o DIR] [--node-link]        scan and write droidmap-out/graph.json and REPORT.md
       check  [path] [--format text|json|sarif] [--fail-on error|warning|info|never] [--sarif FILE]
              [--base REF]                           also compare Room schema files with a git commit
@@ -65,11 +68,24 @@ fun parseArgs(argv: List<String>, valued: Set<String>, flagNames: Set<String>, a
     return Args(pos, opts, flags)
 }
 
-class Cli(private val out: PrintStream = System.out, private val err: PrintStream = System.err) {
+private fun hasSettings(dir: Path) = Files.isRegularFile(dir.resolve("settings.gradle.kts")) || Files.isRegularFile(dir.resolve("settings.gradle"))
+
+/** The folder of the nearest settings.gradle(.kts) at or above [from], so droidmap works from any folder inside a project. */
+fun findProjectRoot(from: Path): Path? = generateSequence(from) { it.parent }.firstOrNull { hasSettings(it) }
+
+class Cli(private val out: PrintStream = System.out, private val err: PrintStream = System.err, private val style: Style = Style.PLAIN) {
+    /** The project folder: [path] as given, or (without one) the nearest Gradle project at or above the current folder. */
     private fun root(path: String?): Path {
-        val r = Path.of(path ?: ".").toAbsolutePath().normalize()
-        if (!Files.isDirectory(r)) throw UsageError("$r is not a directory")
-        return r
+        val given = Path.of(path ?: ".").toAbsolutePath().normalize()
+        if (!Files.isDirectory(given)) throw UsageError("$given is not a directory")
+        if (hasSettings(given)) return given
+        if (path != null) {
+            err.println("droidmap: warning: $given has no settings.gradle(.kts); is it the project's root folder?")
+            return given
+        }
+        return findProjectRoot(given)
+            ?: throw UsageError("$given is not inside a Gradle project (no settings.gradle(.kts) here or above): " +
+                "run droidmap from your Android project's root folder, or pass its path")
     }
 
     private fun config(root: Path, a: Args): Config = try {
@@ -163,7 +179,7 @@ class Cli(private val out: PrintStream = System.out, private val err: PrintStrea
         when (format) {
             "json" -> out.println(jsonText(findings.map { it.toMap() }))
             "sarif" -> out.println(jsonText(toSarif(findings, prefix)))
-            else -> out.println(formatFindings(findings))
+            else -> out.println(formatFindings(findings, style))
         }
         a.opt("--sarif")?.let { Files.writeString(Path.of(it), jsonText(toSarif(findings, prefix)) + "\n") }
         val floor = SEVERITY_ORDER[failOn] ?: return 0
@@ -177,10 +193,10 @@ class Cli(private val out: PrintStream = System.out, private val err: PrintStrea
         val node = pick(g, text) ?: return 2
         if (impact) {
             val r = impact(g, node.id, a.opt("--depth")?.toIntOrNull() ?: 4)
-            out.println(if (a.flag("--json")) jsonText(r.toMap()) else formatImpact(r))
+            out.println(if (a.flag("--json")) jsonText(r.toMap()) else formatImpact(r, style = style))
         } else {
             val s = show(g, node.id)
-            out.println(if (a.flag("--json")) jsonText(s.toMap()) else formatShow(s))
+            out.println(if (a.flag("--json")) jsonText(s.toMap()) else formatShow(s, style))
         }
         return 0
     }
@@ -193,7 +209,7 @@ class Cli(private val out: PrintStream = System.out, private val err: PrintStrea
         when {
             a.flag("--json") -> out.println(jsonText(hits.map { Graph.nodeMap(it) }))
             hits.isEmpty() -> out.println("No matches.")
-            else -> out.println(formatFind(hits))
+            else -> out.println(formatFind(hits, style))
         }
         return if (hits.isEmpty()) 1 else 0
     }
@@ -223,7 +239,15 @@ class Cli(private val out: PrintStream = System.out, private val err: PrintStrea
     }
 
     private fun rules(): Int {
-        RULES.values.forEach { out.println("${it.id.padEnd(28)} ${it.severity.padEnd(8)} ${it.description}") }
+        RULES.values.forEach { out.println("${style.bold(it.id.padEnd(28))} ${style.severity(it.severity, it.severity.padEnd(8))} ${it.description}") }
+        return 0
+    }
+
+    private fun init(rest: List<String>): Int {
+        val a = parseArgs(rest, emptySet(), emptySet())
+        val project = root(a.positionals.firstOrNull())
+        val repo = Git.topLevel(project)?.takeIf { project.startsWith(it) } ?: project
+        out.println(formatInit(initProject(project, repo), style))
         return 0
     }
 
@@ -239,7 +263,7 @@ class Cli(private val out: PrintStream = System.out, private val err: PrintStrea
     private companion object {
         val COMMON = setOf("--config", "--graph")
         val COMMANDS: Map<String, Cli.(List<String>) -> Int> = mapOf(
-            "build" to { build(it) }, "check" to { check(it) }, "impact" to { impactOrShow(it, impact = true) },
+            "init" to { init(it) }, "build" to { build(it) }, "check" to { check(it) }, "impact" to { impactOrShow(it, impact = true) },
             "show" to { impactOrShow(it, impact = false) }, "find" to { find(it) }, "diff" to { diff(it) },
             "report" to { report(it) }, "rules" to { rules() }, "mcp" to { mcp(it) },
         )
@@ -247,8 +271,8 @@ class Cli(private val out: PrintStream = System.out, private val err: PrintStrea
 }
 
 /** Runs the CLI and turns errors into exit codes: 2 for a usage error, 3 for a bug (never 1, which means findings). */
-fun runMain(argv: List<String>, out: PrintStream = System.out, err: PrintStream = System.err): Int = try {
-    Cli(out, err).run(argv)
+fun runMain(argv: List<String>, out: PrintStream = System.out, err: PrintStream = System.err, style: Style = Style.PLAIN): Int = try {
+    Cli(out, err, style).run(argv)
 } catch (e: UsageError) {
     err.println("droidmap: ${e.message}")
     err.println("Run `droidmap --help` for usage.")
@@ -261,7 +285,7 @@ fun runMain(argv: List<String>, out: PrintStream = System.out, err: PrintStream 
 
 fun main(argv: Array<String>) {
     System.setOut(PrintStream(FileOutputStream(FileDescriptor.out), true, Charsets.UTF_8))
-    val code = runMain(argv.toList())
+    val code = runMain(argv.toList(), style = Style.detect())
     System.out.flush()
     exitProcess(code)
 }

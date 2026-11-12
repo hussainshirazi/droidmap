@@ -5,15 +5,15 @@
 <circle cx="20" cy="17" r="6" fill="#ff5f56"/><circle cx="40" cy="17" r="6" fill="#ffbd2e"/><circle cx="60" cy="17" r="6" fill="#27c93f"/>
 <g font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="13" xml:space="preserve" style="white-space:pre">
 <text x="18" y="52"><tspan fill="#7ee787">$&#160;</tspan><tspan fill="#e6edf3">droidmap&#160;check</tspan></text>
-<text x="18" y="72"><tspan fill="#ff7b72">error&#160;&#160;&#160;</tspan><tspan fill="#c9d1d9">room-migration-path&#160;&#160;&#160;&#160;&#160;&#160;</tspan><tspan fill="#8b949e">core/database/.../AppDatabase.kt:16</tspan></text>
+<text x="18" y="72"><tspan fill="#ff7b72" font-weight="bold">error&#160;&#160;&#160;</tspan><tspan fill="#e6edf3" font-weight="bold">room-migration-path&#160;&#160;&#160;&#160;&#160;&#160;</tspan><tspan fill="#8b949e">core/database/.../AppDatabase.kt:16</tspan></text>
 <text x="18" y="92"><tspan fill="#c9d1d9">&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;AppDatabase&#160;is&#160;at&#160;version&#160;5&#160;but&#160;there&#160;is&#160;no&#160;migration&#160;path&#160;from&#160;versions&#160;1,&#160;2,&#160;3,&#160;4</tspan></text>
-<text x="18" y="112"><tspan fill="#ff7b72">error&#160;&#160;&#160;</tspan><tspan fill="#c9d1d9">nav-unknown-target&#160;&#160;&#160;&#160;&#160;&#160;&#160;</tspan><tspan fill="#8b949e">app/.../AppNav.kt:36</tspan></text>
+<text x="18" y="112"><tspan fill="#ff7b72" font-weight="bold">error&#160;&#160;&#160;</tspan><tspan fill="#e6edf3" font-weight="bold">nav-unknown-target&#160;&#160;&#160;&#160;&#160;&#160;&#160;</tspan><tspan fill="#8b949e">app/.../AppNav.kt:36</tspan></text>
 <text x="18" y="132"><tspan fill="#c9d1d9">&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;AppNav&#160;navigates&#160;to&#160;settings,&#160;but&#160;no&#160;destination&#160;registers&#160;it</tspan></text>
-<text x="18" y="152"><tspan fill="#e3b341">warning&#160;</tspan><tspan fill="#c9d1d9">hilt-missing-binding&#160;&#160;&#160;&#160;&#160;</tspan><tspan fill="#8b949e">feature/home/.../HomeViewModel.kt:13</tspan></text>
+<text x="18" y="152"><tspan fill="#e3b341">warning&#160;</tspan><tspan fill="#e6edf3" font-weight="bold">hilt-missing-binding&#160;&#160;&#160;&#160;&#160;</tspan><tspan fill="#8b949e">feature/home/.../HomeViewModel.kt:13</tspan></text>
 <text x="18" y="172"><tspan fill="#c9d1d9">&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;HomeViewModel&#160;injects&#160;TagRepository,&#160;but&#160;nothing&#160;binds&#160;it</tspan></text>
-<text x="18" y="192"><tspan fill="#e3b341">warning&#160;</tspan><tspan fill="#c9d1d9">room-migration-untested&#160;&#160;</tspan><tspan fill="#8b949e">core/database/.../AppDatabase.kt:16</tspan></text>
+<text x="18" y="192"><tspan fill="#e3b341">warning&#160;</tspan><tspan fill="#e6edf3" font-weight="bold">room-migration-untested&#160;&#160;</tspan><tspan fill="#8b949e">core/database/.../AppDatabase.kt:16</tspan></text>
 <text x="18" y="212"><tspan fill="#c9d1d9">&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;AppDatabase:&#160;2&#160;of&#160;3&#160;migration&#160;steps&#160;have&#160;no&#160;MigrationTestHelper&#160;test&#160;(2-&gt;3,&#160;3-&gt;4)</tspan></text>
-<text x="18" y="232"><tspan fill="#8b949e">8&#160;errors,&#160;7&#160;warnings</tspan></text>
+<text x="18" y="232"><tspan fill="#ff7b72" font-weight="bold">8&#160;errors</tspan><tspan fill="#8b949e">,&#160;</tspan><tspan fill="#e3b341">7&#160;warnings</tspan></text>
 <text x="18" y="272"><tspan fill="#7ee787">$&#160;</tspan><tspan fill="#e6edf3">droidmap&#160;diff&#160;--base&#160;origin/main</tspan><tspan fill="#8b949e">&#160;&#160;&#160;&#160;&#160;&#160;#&#160;an&#160;entity&#160;gained&#160;a&#160;column</tspan></text>
 <text x="18" y="292"><tspan fill="#79c0ff">Changed&#160;(1):&#160;</tspan><tspan fill="#c9d1d9">ItemEntity&#160;(room_entity)</tspan></text>
 <text x="18" y="312"><tspan fill="#79c0ff">Affected&#160;(what&#160;depends&#160;on&#160;the&#160;changed&#160;code):</tspan></text>

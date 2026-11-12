@@ -25,6 +25,10 @@ jobs:
           java-version: "17"
       - run: sh install.sh
       - run: ~/.local/bin/droidmap --version
+      - name: Finds Android Studio's Java without JAVA_HOME or a java on the PATH
+        run: |
+          mkdir -p ~/android-studio && ln -s "$JAVA_HOME" ~/android-studio/jbr
+          env -u JAVA_HOME PATH=/nonexistent /bin/sh ~/.local/bin/droidmap --version
 
   install-powershell:
     runs-on: windows-latest

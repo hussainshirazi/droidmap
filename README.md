@@ -37,13 +37,14 @@ irm https://raw.githubusercontent.com/hussainshirazi/droidmap/main/install.ps1 |
 
 Homebrew: `brew tap hussainshirazi/droidmap https://github.com/hussainshirazi/droidmap` then `brew install droidmap`. Scoop: `scoop bucket add droidmap https://github.com/hussainshirazi/droidmap` then `scoop install droidmap/droidmap`.
 
-Or download `droidmap.jar` from the [latest release](../../releases/latest) and run `java -jar droidmap.jar`. droidmap needs Java 17 or newer; Android Studio already has one in its `jbr` folder (set `JAVA_HOME` to it). The jar is about 65 MB because it carries the Kotlin compiler's parser.
+Or download `droidmap.jar` from the [latest release](../../releases/latest) and run `java -jar droidmap.jar`. droidmap needs Java 17 or newer. The `droidmap` command uses `JAVA_HOME`, the `java` on your PATH, or else the Java that Android Studio brings, so with Android Studio installed there is nothing to set up. The jar is about 65 MB because it carries the Kotlin compiler's parser.
 
 ## Quick start
 
-From your project's root:
+From anywhere inside your project:
 
 ```sh
+droidmap init                     # once: the GitHub workflow and the MCP config for AI agents
 droidmap check                    # run the rules; exit code 1 on errors
 droidmap impact TopicEntity       # what depends on it, transitively
 droidmap diff                     # what your uncommitted changes touch
@@ -52,6 +53,8 @@ droidmap report -o REPORT.md      # an overview, with module and screen-flow dia
 ```
 
 ## On pull requests (GitHub Action)
+
+`droidmap init` writes this workflow to `.github/workflows/droidmap.yml`:
 
 ```yaml
 name: droidmap
@@ -103,7 +106,7 @@ Findings show up as code scanning alerts, as notes on the changed lines and in t
 
 `droidmap mcp` is a [Model Context Protocol](https://modelcontextprotocol.io) server over stdio. It rebuilds the graph when a file changes (parsing only the changed files), so its answers follow the code as the agent edits it.
 
-Claude Code:
+`droidmap init` writes `.mcp.json` (Claude Code), and `.cursor/mcp.json` or `.vscode/mcp.json` when those folders exist; commit them and everyone on the team gets the server. It never changes a file that exists: it prints what to add instead. To set it up by hand in Claude Code:
 
 ```sh
 claude mcp add droidmap -- droidmap mcp .
@@ -140,6 +143,7 @@ Kotlin and Java are read with the Kotlin compiler's own parser (the one detekt a
 ## Commands
 
 ```sh
+droidmap init   [path]                               # write the GitHub workflow and MCP config (never overwrites)
 droidmap check  [path] [--format text|json|sarif] [--fail-on error|warning|info|never] [--sarif FILE] [--base REF]
 droidmap impact <node> [path] [--depth N] [--json]   # what depends on a node
 droidmap diff   [path] [--base REF] [--depth N] [--format text|markdown|json]   # what a change touches
@@ -150,6 +154,8 @@ droidmap build  [path] [-o DIR] [--node-link]        # write droidmap-out/graph.
 droidmap rules                                       # list the rules and their default severities
 droidmap mcp    [path]                               # run the MCP server over stdio
 ```
+
+Without `[path]`, droidmap works on the Gradle project around the current folder (the nearest `settings.gradle(.kts)` at or above it). Output is in colour in a terminal; `NO_COLOR=1` turns that off and `FORCE_COLOR=1` on.
 
 `<node>` can be an id, a name or part of a name: `TopicEntity`, `:core:data`, `"editor?id={id}"`, `HomeViewModel`. `check`, `impact`, `show`, `find` and `report` also take `--config FILE` and `--graph FILE` (use a saved `graph.json` instead of scanning); `build`, `diff` and `mcp` take `--config FILE`.
 

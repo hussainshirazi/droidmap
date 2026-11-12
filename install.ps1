@@ -28,15 +28,24 @@ if ($expected) {
 }
 Move-Item -Force "$jar.part" $jar
 
-# droidmap.cmd runs the jar with %JAVA_HOME%'s java, or the one on the PATH (Java 17 or newer).
+# droidmap.cmd runs the jar with Java 17 or newer: %JAVA_HOME%'s, the one on the PATH, or the one
+# Android Studio brings (so a machine with Android Studio needs no Java setup).
 # A short run starts faster with only the quick JIT compiler and the serial GC.
-$cmd = @"
+$cmd = @'
 @echo off
-set "DROIDMAP_JAVA=java"
-if defined JAVA_HOME set "DROIDMAP_JAVA=%JAVA_HOME%\bin\java"
-"%DROIDMAP_JAVA%" -XX:TieredStopAtLevel=1 -XX:+UseSerialGC -jar "$jar" %*
-"@
-Set-Content -Path (Join-Path $dir 'droidmap.cmd') -Value $cmd -Encoding ascii
+setlocal
+set "J="
+if defined JAVA_HOME if exist "%JAVA_HOME%\bin\java.exe" set "J=%JAVA_HOME%\bin\java.exe"
+if not defined J for %%P in (java.exe) do set "J=%%~$PATH:P"
+if not defined J if exist "%ProgramFiles%\Android\Android Studio\jbr\bin\java.exe" set "J=%ProgramFiles%\Android\Android Studio\jbr\bin\java.exe"
+if not defined J if exist "%LOCALAPPDATA%\Programs\Android Studio\jbr\bin\java.exe" set "J=%LOCALAPPDATA%\Programs\Android Studio\jbr\bin\java.exe"
+if not defined J (
+  echo droidmap needs Java 17 or newer: install Android Studio or a JDK, or set JAVA_HOME. 1>&2
+  exit /b 2
+)
+"%J%" -XX:TieredStopAtLevel=1 -XX:+UseSerialGC -jar "__JAR__" %*
+'@
+Set-Content -Path (Join-Path $dir 'droidmap.cmd') -Value $cmd.Replace('__JAR__', $jar) -Encoding ascii
 
 $path = [Environment]::GetEnvironmentVariable('Path', 'User')
 if (-not (($path -split ';') -contains $dir)) {
