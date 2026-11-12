@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.2.1 (2026-11-12)
+
+- The GitHub Action's description is short enough for the GitHub Marketplace, so the Action can be listed there.
+- Release notes come from this changelog.
+
 ## 0.2.0 (2026-11-12)
 
 - `diff`: what a change touches. It maps the changed lines (since `--base`, by default the uncommitted changes) onto the innermost declarations around them and lists what depends on those: screens, destinations, ViewModels, Room, bindings, modules and tests, with the findings in the changed files. The GitHub Action posts it on each pull request and keeps one comment updated; the MCP server has `droidmap_diff`.

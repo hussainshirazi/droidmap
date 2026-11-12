@@ -101,6 +101,13 @@ class KotlinTest {
     }
 
     @Test
+    fun theActionCanBeListedOnTheMarketplace() {
+        val action = java.nio.file.Files.readString(java.nio.file.Path.of("action.yml"))
+        val description = Regex("(?m)^description: (.*)$").find(action)!!.groupValues[1]
+        assertTrue(description.length < 125, "the GitHub Marketplace takes descriptions under 125 characters: ${description.length}")
+    }
+
+    @Test
     fun everyRuleHasAPage() {
         for (r in Rule.entries) {
             val page = r.page() ?: error("docs/rules/${r.id}.md is missing")

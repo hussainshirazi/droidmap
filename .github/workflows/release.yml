@@ -31,8 +31,12 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          # The notes are the version's section of CHANGELOG.md (from "## 0.2.1 (date)" to the next "## ").
+          awk -v v="${GITHUB_REF_NAME#v}" '/^## / { on = ($2 == v) ; next } on' CHANGELOG.md > "$RUNNER_TEMP/notes.md"
+          if [ ! -s "$RUNNER_TEMP/notes.md" ]; then echo "CHANGELOG.md has no section for ${GITHUB_REF_NAME#v}"; exit 1; fi
+          printf '\n**Full changelog**: [CHANGELOG.md](https://github.com/%s/blob/%s/CHANGELOG.md)\n' "$GITHUB_REPOSITORY" "$GITHUB_REF_NAME" >> "$RUNNER_TEMP/notes.md"
           cd build/libs && sha256sum droidmap.jar > droidmap.jar.sha256
-          gh release create "$GITHUB_REF_NAME" droidmap.jar droidmap.jar.sha256 --title "droidmap $GITHUB_REF_NAME" --generate-notes
+          gh release create "$GITHUB_REF_NAME" droidmap.jar droidmap.jar.sha256 --title "droidmap $GITHUB_REF_NAME" --notes-file "$RUNNER_TEMP/notes.md"
       - name: Move v0 to this release
         if: startsWith(github.ref_name, 'v0.')
         run: |

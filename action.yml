@@ -1,5 +1,5 @@
 name: droidmap check
-description: Android-aware checks (Room migrations and schemas, navigation, Hilt and Koin, Gradle modules, permissions) and what each pull request touches.
+description: Android checks (Room migrations, navigation, Hilt, Koin, Gradle modules, permissions) and what each pull request touches.
 author: hussainshirazi
 branding:
   icon: map
