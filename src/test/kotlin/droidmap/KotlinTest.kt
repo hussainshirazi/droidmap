@@ -97,6 +97,18 @@ class KotlinTest {
         fun listed(heading: String) = Regex("$heading: (.*)\\.").find(readme)!!.groupValues[1].split(", ").map { it.trim('`') }.toSet()
         assertEquals(NODE_KINDS - "ref", listed("Node kinds"))
         assertEquals(EDGE_KINDS, listed("Edge kinds"))
-        for (r in Rule.entries) assertTrue("| `${r.id}` | ${r.severity} |" in readme, "README's rules table misses ${r.id} (${r.severity})")
+        for (r in Rule.entries) assertTrue("| [`${r.id}`](docs/rules/${r.id}.md) | ${r.severity} |" in readme, "README's rules table misses ${r.id} (${r.severity})")
+    }
+
+    @Test
+    fun everyRuleHasAPage() {
+        for (r in Rule.entries) {
+            val page = r.page() ?: error("docs/rules/${r.id}.md is missing")
+            assertTrue(page.startsWith("# ${r.id}\n") && "Default: **${r.severity}**" in page, "docs/rules/${r.id}.md: title or default severity")
+        }
+        assertTrue(explainRule("room-migration-path")!!.endsWith("Online: $RULES_URL/room-migration-path.md"))
+        assertEquals(null, explainRule("no-such-rule"))
+        val sarif = jsonText(toSarif(emptyList()))
+        assertTrue("\"helpUri\"" in sarif && "\"markdown\"" in sarif)
     }
 }

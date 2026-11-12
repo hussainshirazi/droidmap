@@ -64,6 +64,6 @@ class SetupTest {
         val lines = formatFindings(listOf(f)).lines()
         assertTrue(lines[0].startsWith("error   room-migration-path") && lines[0].endsWith("a/B.kt:3"), lines[0])
         assertTrue(lines.drop(1).takeWhile { it.isNotEmpty() }.all { it.startsWith("        ") && it.length <= 100 })
-        assertEquals("1 error", lines.last())
+        assertEquals(listOf("1 error", "Why each one matters and how to fix it: droidmap explain <rule>"), lines.takeLast(2))
     }
 }

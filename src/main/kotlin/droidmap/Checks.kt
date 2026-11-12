@@ -27,7 +27,16 @@ enum class Rule(val id: String, val severity: String, val description: String) {
     GRADLE_FORBIDDEN_DEPENDENCY("gradle-forbidden-dependency", "error", "A module dependency banned by a [[gradle.forbid]] rule"),
     GRADLE_CYCLE("gradle-cycle", "error", "Modules that depend on each other in a cycle"),
     MANIFEST_PERMISSION("manifest-permission", "error", "A permission (in a source manifest, or added by a library to the merged one) that is not in [manifest] allowed_permissions"),
+    ;
+
+    /** The rule's page on GitHub. */
+    val url: String get() = "$RULES_URL/$id.md"
+
+    /** The rule's page (docs/rules/<id>.md, packed into the jar): why it matters and how to fix it. */
+    fun page(): String? = Rule::class.java.getResource("/rules/$id.md")?.readText()?.replace("\r\n", "\n")
 }
+
+const val RULES_URL = "https://github.com/hussainshirazi/droidmap/blob/main/docs/rules"
 
 /** Rules by id, sorted. */
 val RULES: Map<String, Rule> = Rule.entries.associateBy { it.id }.toSortedMap()

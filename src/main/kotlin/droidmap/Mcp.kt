@@ -19,8 +19,9 @@ val TOOLS: List<Map<String, Any?>> = listOf(
     mapOf("name" to "droidmap_check",
         "description" to "Run droidmap's Android rules (Room migration paths, schema files, entities that no longer match the " +
             "current version's schema so the version must be bumped, and migration tests; navigation " +
-            "targets with no destination; Hilt missing or duplicate bindings; Gradle module rules and cycles; manifest " +
-            "permission allowlist) and list the findings.",
+            "targets with no destination and deep links no intent filter accepts; Hilt missing or duplicate bindings and the " +
+            "@HiltAndroidApp Application; WorkManager with Hilt; Koin definitions; Gradle module rules and cycles; manifest " +
+            "permission allowlist) and list the findings. droidmap_explain says how to fix one.",
         "inputSchema" to mapOf("type" to "object", "properties" to mapOf(
             "min_severity" to mapOf("type" to "string", "enum" to listOf("error", "warning", "info"),
                 "description" to "Only show findings this severe or worse (default: info).")))),
@@ -49,6 +50,10 @@ val TOOLS: List<Map<String, Any?>> = listOf(
         "description" to "A Markdown overview of the project: modules and their dependencies, Room databases with migration " +
             "and test coverage, navigation destinations, Hilt bindings, findings.",
         "inputSchema" to mapOf("type" to "object", "properties" to emptyMap<String, Any>())),
+    mapOf("name" to "droidmap_explain",
+        "description" to "Why a droidmap rule matters (the crash or data loss it prevents) and how to fix what it finds, with examples.",
+        "inputSchema" to mapOf("type" to "object", "required" to listOf("rule"), "properties" to mapOf(
+            "rule" to mapOf("type" to "string", "enum" to RULES.keys.toList())))),
 )
 
 private class ToolError(message: String) : Exception(message)
@@ -124,6 +129,10 @@ class McpServer(private val root: Path, private val configPath: Path? = null, pr
     }
 
     private fun callText(name: String, args: Map<String, Any?>): String {
+        if (name == "droidmap_explain") {
+            val id = (args["rule"] as? String)?.trim().orEmpty()
+            return explainRule(id) ?: throw ToolError("There is no rule \"$id\"; the rules are: ${RULES.keys.joinToString(", ")}")
+        }
         val (built, cfg) = try {
             current()
         } catch (e: IllegalArgumentException) {

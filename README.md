@@ -142,6 +142,7 @@ Cursor, VS Code, Windsurf and other clients take the same command in their MCP c
 | `droidmap_show` | look at one node: its attributes, dependencies and users |
 | `droidmap_find` | search nodes by name |
 | `droidmap_report` | get a Markdown overview of the project |
+| `droidmap_explain` | learn why a rule matters and how to fix what it found |
 
 ## What droidmap understands
 
@@ -168,6 +169,7 @@ droidmap find   <text> [path] [--limit N] [--json]   # search nodes
 droidmap report [path] [-o FILE]                     # the Markdown report, with Mermaid diagrams
 droidmap build  [path] [-o DIR] [--node-link]        # write droidmap-out/graph.json and REPORT.md
 droidmap rules                                       # list the rules and their default severities
+droidmap explain <rule>                              # why a rule matters and how to fix what it finds
 droidmap mcp    [path]                               # run the MCP server over stdio
 ```
 
@@ -185,26 +187,26 @@ Exit codes: 0 when done, 1 when `check` finds something at `--fail-on` or above 
 
 | Rule | Default | Finds |
 |---|---|---|
-| `room-migration-path` | error | a known schema version with no migration path to the current version |
-| `room-schema-missing` | warning | no exported schema JSON for the current version or an earlier one |
-| `room-schema-stale` | warning | entities that no longer match the schema JSON of the current version: a changed entity without a version bump crashes on update |
-| `room-schema-changed` | warning | with `--base REF`: the schema JSON of a version that already existed at `REF` changed, which is the same crash once that version has shipped |
-| `room-migration-untested` | warning | migration steps no `MigrationTestHelper` test runs |
-| `room-migration-unused` | warning | a manual `Migration` that app code never uses (not passed to `addMigrations`?), even if a test runs it |
-| `room-destructive-fallback` | warning | `fallbackToDestructiveMigration()`, which deletes user data |
-| `room-insert-replace` | off | `@Insert(onConflict = REPLACE)`, which deletes and re-inserts rows |
-| `nav-unknown-target` | error | `navigate()` to a route or key no destination registers |
-| `nav-unreachable` | warning | a destination nothing navigates to, starts at or refers to, and that no deep link or menu item opens |
-| `nav-deeplink-not-in-manifest` | warning | a deep link (`navDeepLink`, `<deepLink>`) whose scheme and host no activity's intent filter accepts, so the link does not open the app |
-| `hilt-missing-binding` | warning | an injected project type with no `@Inject` constructor, `@Provides` or `@Binds` |
-| `hilt-duplicate-binding` | error | the same type and qualifier bound twice in one source set |
-| `hilt-app-not-registered` | error | `@AndroidEntryPoint` classes, but the manifest's `<application android:name>` is not the `@HiltAndroidApp` class (or there is none): they crash when they open |
-| `workmanager-setup` | warning | a `@HiltWorker` that nothing gives `HiltWorkerFactory` to, or a `Configuration.Provider` that WorkManager never asks because its default initializer is still in the manifest |
-| `koin-missing-definition` | warning | a type Koin is asked for (`get()`, `inject()`, `koinInject()`) that no Koin definition provides: `NoDefinitionFoundException` at runtime |
-| `gradle-unknown-project` | error | a project dependency on a module settings does not include |
-| `gradle-forbidden-dependency` | error | a dependency your `[[gradle.forbid]]` rules ban |
-| `gradle-cycle` | error | modules that depend on each other in a cycle |
-| `manifest-permission` | error | a permission not in your `allowed_permissions`, in a source manifest or added by a library to the merged one |
+| [`room-migration-path`](docs/rules/room-migration-path.md) | error | a known schema version with no migration path to the current version |
+| [`room-schema-missing`](docs/rules/room-schema-missing.md) | warning | no exported schema JSON for the current version or an earlier one |
+| [`room-schema-stale`](docs/rules/room-schema-stale.md) | warning | entities that no longer match the schema JSON of the current version: a changed entity without a version bump crashes on update |
+| [`room-schema-changed`](docs/rules/room-schema-changed.md) | warning | with `--base REF`: the schema JSON of a version that already existed at `REF` changed, which is the same crash once that version has shipped |
+| [`room-migration-untested`](docs/rules/room-migration-untested.md) | warning | migration steps no `MigrationTestHelper` test runs |
+| [`room-migration-unused`](docs/rules/room-migration-unused.md) | warning | a manual `Migration` that app code never uses (not passed to `addMigrations`?), even if a test runs it |
+| [`room-destructive-fallback`](docs/rules/room-destructive-fallback.md) | warning | `fallbackToDestructiveMigration()`, which deletes user data |
+| [`room-insert-replace`](docs/rules/room-insert-replace.md) | off | `@Insert(onConflict = REPLACE)`, which deletes and re-inserts rows |
+| [`nav-unknown-target`](docs/rules/nav-unknown-target.md) | error | `navigate()` to a route or key no destination registers |
+| [`nav-unreachable`](docs/rules/nav-unreachable.md) | warning | a destination nothing navigates to, starts at or refers to, and that no deep link or menu item opens |
+| [`nav-deeplink-not-in-manifest`](docs/rules/nav-deeplink-not-in-manifest.md) | warning | a deep link (`navDeepLink`, `<deepLink>`) whose scheme and host no activity's intent filter accepts, so the link does not open the app |
+| [`hilt-missing-binding`](docs/rules/hilt-missing-binding.md) | warning | an injected project type with no `@Inject` constructor, `@Provides` or `@Binds` |
+| [`hilt-duplicate-binding`](docs/rules/hilt-duplicate-binding.md) | error | the same type and qualifier bound twice in one source set |
+| [`hilt-app-not-registered`](docs/rules/hilt-app-not-registered.md) | error | `@AndroidEntryPoint` classes, but the manifest's `<application android:name>` is not the `@HiltAndroidApp` class (or there is none): they crash when they open |
+| [`workmanager-setup`](docs/rules/workmanager-setup.md) | warning | a `@HiltWorker` that nothing gives `HiltWorkerFactory` to, or a `Configuration.Provider` that WorkManager never asks because its default initializer is still in the manifest |
+| [`koin-missing-definition`](docs/rules/koin-missing-definition.md) | warning | a type Koin is asked for (`get()`, `inject()`, `koinInject()`) that no Koin definition provides: `NoDefinitionFoundException` at runtime |
+| [`gradle-unknown-project`](docs/rules/gradle-unknown-project.md) | error | a project dependency on a module settings does not include |
+| [`gradle-forbidden-dependency`](docs/rules/gradle-forbidden-dependency.md) | error | a dependency your `[[gradle.forbid]]` rules ban |
+| [`gradle-cycle`](docs/rules/gradle-cycle.md) | error | modules that depend on each other in a cycle |
+| [`manifest-permission`](docs/rules/manifest-permission.md) | error | a permission not in your `allowed_permissions`, in a source manifest or added by a library to the merged one |
 
 ## Configuration
 

@@ -183,7 +183,8 @@ fun formatDiff(r: DiffReport, markdown: Boolean): String {
         out += listOf("", "${b}Findings in the changed files$b (${r.findings.size}):")
         for (f in r.findings.take(SHOWN)) {
             val where = location(f.file, f.line)
-            out.add(if (markdown) "- **${f.severity}** `${f.rule}` `$where`: ${f.message}" else "  ${f.severity} ${f.rule} $where\n      ${f.message}")
+            val rule = RULES[f.rule]?.let { "[`${f.rule}`](${it.url})" } ?: "`${f.rule}`"
+            out.add(if (markdown) "- **${f.severity}** $rule `$where`: ${f.message}" else "  ${f.severity} ${f.rule} $where\n      ${f.message}")
         }
         if (r.findings.size > SHOWN) out.add("${if (markdown) "- " else "  "}and ${r.findings.size - SHOWN} more")
     }

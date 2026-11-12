@@ -29,6 +29,7 @@ private val USAGE = """
                                                    tasks list the modules whose tests it can break, for CI
       report [path] [-o FILE]                      the Markdown report, with module and screen diagrams
       rules                                        list the rules and their default severities
+      explain <rule>                               why a rule matters and how to fix what it finds
       mcp    [path]                                run as an MCP server over stdio
 
     Common options: --config FILE (default <path>/.droidmap.toml), --graph FILE (use a saved graph.json)
@@ -255,6 +256,12 @@ class Cli(private val out: PrintStream = System.out, private val err: PrintStrea
         return 0
     }
 
+    private fun explain(rest: List<String>): Int {
+        val id = parseArgs(rest, emptySet(), emptySet()).positionals.firstOrNull() ?: throw UsageError("explain needs a rule (`droidmap rules` lists them)")
+        out.println(explainRule(id) ?: throw UsageError("there is no rule \"$id\" (`droidmap rules` lists them)"))
+        return 0
+    }
+
     private fun init(rest: List<String>): Int {
         val a = parseArgs(rest, emptySet(), emptySet())
         val project = root(a.positionals.firstOrNull())
@@ -277,7 +284,7 @@ class Cli(private val out: PrintStream = System.out, private val err: PrintStrea
         val COMMANDS: Map<String, Cli.(List<String>) -> Int> = mapOf(
             "init" to { init(it) }, "build" to { build(it) }, "check" to { check(it) }, "impact" to { impactOrShow(it, impact = true) },
             "show" to { impactOrShow(it, impact = false) }, "find" to { find(it) }, "diff" to { diff(it) },
-            "report" to { report(it) }, "rules" to { rules() }, "mcp" to { mcp(it) },
+            "report" to { report(it) }, "rules" to { rules() }, "explain" to { explain(it) }, "mcp" to { mcp(it) },
         )
     }
 }

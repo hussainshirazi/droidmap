@@ -18,15 +18,23 @@ fun formatFindings(findings: List<Finding>, style: Style = Style.PLAIN): String 
     lines.add("")
     lines.add(listOf("error", "warning", "info").filter { (counts[it] ?: 0) > 0 }
         .joinToString(", ") { style.severity(it, "${counts[it]} ${plural(counts.getValue(it), it)}") })
+    lines.add(style.dim("Why each one matters and how to fix it: droidmap explain <rule>"))
     return lines.joinToString("\n")
+}
+
+/** `droidmap explain`: a rule's page, or null for an unknown rule. */
+fun explainRule(id: String): String? {
+    val r = RULES[id] ?: return null
+    return (r.page() ?: "# ${r.id}\n\n${r.description}.").trimEnd() + "\n\nOnline: ${r.url}"
 }
 
 /** SARIF 2.1.0 for GitHub code scanning; [prefix] is put before every file path (see `check --sarif`). */
 fun toSarif(findings: List<Finding>, prefix: String = ""): Map<String, Any?> {
     val level = mapOf("error" to "error", "warning" to "warning", "info" to "note")
     val rules = RULES.values.map { r ->
-        linkedMapOf("id" to r.id, "shortDescription" to mapOf("text" to r.description),
-            "defaultConfiguration" to mapOf("level" to (level[r.severity] ?: "none")))
+        linkedMapOf("id" to r.id, "shortDescription" to mapOf("text" to r.description), "helpUri" to r.url,
+            "help" to r.page()?.let { mapOf("text" to it, "markdown" to it) },
+            "defaultConfiguration" to mapOf("level" to (level[r.severity] ?: "none"))).filterValues { it != null }
     }
     val results = findings.map { f ->
         val r = linkedMapOf<String, Any?>("ruleId" to f.rule, "level" to (level[f.severity] ?: "note"), "message" to mapOf("text" to f.message))

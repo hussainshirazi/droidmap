@@ -48,6 +48,9 @@ val versionSource by tasks.registering {
 }
 kotlin.sourceSets.main { kotlin.srcDir(versionSource) }
 
+// The rule pages (docs/rules/*.md) go into the jar for `droidmap explain` and the SARIF help.
+tasks.processResources { from("docs/rules") { into("rules") } }
+
 application {
     mainClass.set("droidmap.MainKt")
     applicationName = "droidmap"
