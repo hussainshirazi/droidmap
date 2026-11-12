@@ -15,11 +15,11 @@ repositories {
 dependencies {
     // The Kotlin compiler's own parser (PSI): the same one detekt and ktlint use.
     implementation("org.jetbrains.kotlin:kotlin-compiler-embeddable:2.4.21")
-    implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.8.1")
-    implementation("org.tomlj:tomlj:1.1.1")
+    implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.12.0")
+    implementation("org.tomlj:tomlj:2.2.0")
 
     testImplementation(kotlin("test"))
-    testImplementation("org.junit.jupiter:junit-jupiter:5.11.4")
+    testImplementation("org.junit.jupiter:junit-jupiter:6.1.3")
     testRuntimeOnly("org.junit.platform:junit-platform-launcher")
 }
 
@@ -35,7 +35,7 @@ kotlin {
 }
 
 // The version lives here only: the code gets it as droidmap.VERSION.
-val versionSource by tasks.registering {
+val versionSource = tasks.register("versionSource") {
     val dir = layout.buildDirectory.dir("generated/version")
     val v = project.version.toString()
     inputs.property("version", v)
@@ -62,7 +62,7 @@ tasks.test {
 }
 
 // One runnable jar: java -jar build/libs/droidmap.jar
-val fatJar by tasks.registering(Jar::class) {
+val fatJar = tasks.register<Jar>("fatJar") {
     group = "build"
     description = "Builds build/libs/droidmap.jar with every dependency inside."
     archiveFileName.set("droidmap.jar")

@@ -19,7 +19,7 @@ private fun workflow(path: String): String {
         "      security-events: write   # findings as code scanning alerts",
         "      pull-requests: write     # the comment that says what the pull request touches",
         "    steps:",
-        "      - uses: actions/checkout@v4",
+        "      - uses: actions/checkout@v7",
         "      - uses: hussainshirazi/droidmap@v0",
     )
     val hint = "upload-sarif: \"false\"   # for a private repository without GitHub code scanning"
