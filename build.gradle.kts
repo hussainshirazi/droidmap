@@ -15,7 +15,7 @@ repositories {
 dependencies {
     // The Kotlin compiler's own parser (PSI): the same one detekt and ktlint use.
     implementation("org.jetbrains.kotlin:kotlin-compiler-embeddable:2.4.21")
-    implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.8.1")
+    implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.12.0")
     implementation("org.tomlj:tomlj:1.1.1")
 
     testImplementation(kotlin("test"))
