@@ -8,5 +8,13 @@
   "homepage": "https://github.com/hussainshirazi/droidmap",
   "repository": "https://github.com/hussainshirazi/droidmap",
   "license": "Apache-2.0",
-  "keywords": ["android", "kotlin", "room", "navigation", "hilt", "koin", "gradle"]
+  "keywords": [
+    "android",
+    "kotlin",
+    "room",
+    "navigation",
+    "hilt",
+    "koin",
+    "gradle"
+  ]
 }
