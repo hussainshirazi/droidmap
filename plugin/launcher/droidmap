@@ -1,0 +1,18 @@
+#!/bin/sh
+# Starts droidmap for the Claude Code plugin (macOS and Linux; droidmap.cmd is the Windows one) with
+# Java 17 or newer: $DROIDMAP_JAVA, $JAVA_HOME's, the one on the PATH, or Android Studio's, so a machine
+# with Android Studio needs no Java setup. Droidmap.java downloads the matching droidmap release once.
+java=""
+for j in "${DROIDMAP_JAVA:-}" "${JAVA_HOME:+$JAVA_HOME/bin/java}" "$(command -v java 2>/dev/null)" \
+         "/Applications/Android Studio.app/Contents/jbr/Contents/Home/bin/java" \
+         "$HOME/Applications/Android Studio.app/Contents/jbr/Contents/Home/bin/java" \
+         "$HOME/android-studio/jbr/bin/java" /opt/android-studio/jbr/bin/java /usr/local/android-studio/jbr/bin/java \
+         /snap/android-studio/current/android-studio/jbr/bin/java; do
+  # macOS has a /usr/bin/java that only says no Java is installed: check that each one runs.
+  if [ -n "$j" ] && [ -x "$j" ] && "$j" -version > /dev/null 2>&1; then java="$j"; break; fi
+done
+if [ -z "$java" ]; then
+  echo "droidmap needs Java 17 or newer: install Android Studio or a JDK, or set JAVA_HOME (or DROIDMAP_JAVA)." >&2
+  exit 2
+fi
+exec "$java" "$(dirname "$0")/Droidmap.java" "$@"

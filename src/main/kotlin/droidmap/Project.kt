@@ -17,6 +17,8 @@ val SKIP_DIRS = setOf("build", "node_modules", "out", "droidmap-out", "graphify-
 private val PACKAGE_NAMES = setOf("build", "out")
 const val MAX_FILE_BYTES = 2_000_000L
 const val CONFIG_NAME = ".droidmap.toml"
+/** res/layout, res/layout-land, res/layout-sw600dp-v13 ... */
+private val LAYOUT_DIR = Regex("(^|/)res/layout(-[^/]+)?$")
 
 class Config(
     val severities: Map<String, String> = emptyMap(),
@@ -111,6 +113,10 @@ class Project(root: Path, config: Config? = null, private val overlay: Map<Strin
     val manifestPaths = ArrayList<String>()
     val navXmlPaths = ArrayList<String>()
     val menuXmlPaths = ArrayList<String>()
+    /** XML files in res/layout folders: which fragments and navigation graphs an activity's layout hosts. */
+    val layoutXmlPaths = ArrayList<String>()
+    /** ProGuard and R8 rules (*.pro, proguard*.txt): which classes release builds keep. */
+    val proguardPaths = ArrayList<String>()
     val tomlPaths = ArrayList<String>()
     val jsonPaths = ArrayList<String>()
     /** Merged manifests a Gradle build left in <module>/build/intermediates/merged_manifests/<variant>/. */
@@ -207,6 +213,8 @@ class Project(root: Path, config: Config? = null, private val overlay: Map<Strin
             low == "androidmanifest.xml" -> manifestPaths
             low.endsWith(".xml") && "/res/navigation" in "/$dir" -> navXmlPaths
             low.endsWith(".xml") && "/res/menu" in "/$dir" -> menuXmlPaths
+            low.endsWith(".xml") && LAYOUT_DIR.containsMatchIn(dir) -> layoutXmlPaths
+            low.endsWith(".pro") || (low.startsWith("proguard") && low.endsWith(".txt")) -> proguardPaths
             low.endsWith(".versions.toml") -> tomlPaths
             low.endsWith(".json") && low.dropLast(5).isNotEmpty() && low.dropLast(5).all { it.isDigit() } -> jsonPaths
             else -> null
@@ -223,7 +231,7 @@ class Project(root: Path, config: Config? = null, private val overlay: Map<Strin
 
     /** Every file droidmap reads. */
     fun readPaths(): Set<String> =
-        (ktPaths + javaPaths + gradlePaths + manifestPaths + navXmlPaths + menuXmlPaths + tomlPaths + jsonPaths).toHashSet()
+        (ktPaths + javaPaths + gradlePaths + manifestPaths + navXmlPaths + menuXmlPaths + layoutXmlPaths + proguardPaths + tomlPaths + jsonPaths).toHashSet()
 
     /** The size and modification time [rel] had when the project was scanned. */
     fun stamp(rel: String): String? = stamps[rel]

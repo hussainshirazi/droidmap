@@ -144,8 +144,8 @@ class McpServer(private val root: Path, private val configPath: Path? = null, pr
                 val base = (args["base"] as? String)?.trim()?.ifEmpty { null } ?: "HEAD"
                 if (!Git.isCommit(root, base)) throw ToolError("$base is not a commit in the git repository of $root")
                 val changes = try { readChanges(root, base) } catch (e: UsageError) { throw ToolError(e.message ?: "git diff failed") }
-                return formatDiff(diffReport(g, changes, runChecks(g, cfg), built.project.readPaths(),
-                    ((args["depth"] as? Number)?.toInt() ?: 4).coerceIn(1, 10), baseGraph(built, changes)), markdown = false)
+                return formatDiff(diffReport(built, changes, runChecks(g, cfg), ((args["depth"] as? Number)?.toInt() ?: 4).coerceIn(1, 10)),
+                    markdown = false)
             }
             "droidmap_check" -> {
                 val floor = SEVERITY_ORDER[args["min_severity"] as? String ?: "info"] ?: 2
@@ -169,7 +169,7 @@ class McpServer(private val root: Path, private val configPath: Path? = null, pr
                 hits.joinToString("\n") { "${it.id}  [${it.kind}]" })
         }
         return if (name == "droidmap_impact") {
-            formatImpact(impact(g, node.id, ((args["depth"] as? Number)?.toInt() ?: 4).coerceIn(1, 10)))
+            formatImpact(impact(g, node.id, ((args["depth"] as? Number)?.toInt() ?: 4).coerceIn(1, 10), Calls(built.code)))
         } else formatShow(show(g, node.id))
     }
 

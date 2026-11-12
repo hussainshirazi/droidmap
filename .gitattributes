@@ -1,5 +1,7 @@
 * text=auto
 gradlew text eol=lf
 *.bat text eol=crlf
+*.cmd text eol=crlf
+plugin/launcher/droidmap text eol=lf
 *.jar binary
 *.sh text eol=lf

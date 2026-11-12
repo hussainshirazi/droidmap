@@ -39,6 +39,17 @@ Homebrew: `brew tap hussainshirazi/droidmap https://github.com/hussainshirazi/dr
 
 Docker, for CI systems other than GitHub Actions (GitLab, Bitbucket, Jenkins, Bitrise): `docker run --rm -v "$PWD":/project ghcr.io/hussainshirazi/droidmap check` (from version 0.2.0).
 
+Gradle (from version 0.3.0), in the root `build.gradle.kts`; then `./gradlew droidmapCheck` fails the build on errors:
+
+```kotlin
+plugins { id("io.github.hussainshirazi.droidmap") version "0.3.0" }
+
+droidmap {
+    failOn.set("warning")       // error (the default), warning, info or never
+    mergedManifest.set(true)    // run each processReleaseMainManifest first: library permissions are checked too
+}
+```
+
 Or download `droidmap.jar` from the [latest release](../../releases/latest) and run `java -jar droidmap.jar`. droidmap needs Java 17 or newer. The `droidmap` command uses `JAVA_HOME`, the `java` on your PATH, or else the Java that Android Studio brings, so with Android Studio installed there is nothing to set up. The jar is about 65 MB because it carries the Kotlin compiler's parser.
 
 ## Quick start
@@ -123,11 +134,13 @@ Findings show up as code scanning alerts, as notes on the changed lines and in t
 
 `--format modules` prints the module paths instead, one per line.
 
+`--format tests` goes further: only the test classes whose calls reach the changed functions, as Gradle arguments (`:core:data:testDebugUnitTest --tests com.example.OfflineRepositoryTest ...`), so `./gradlew $(droidmap diff --base origin/main --format tests --task testDebugUnitTest)` runs just those. Calls are followed through what the code declares (a property's or parameter's type, a constructor, a function's return type), and a call on an interface reaches every implementation, so it errs towards running more tests. The text report and `impact` list the same tests under "Tests that cover it".
+
 ## With an AI agent (MCP)
 
 `droidmap mcp` is a [Model Context Protocol](https://modelcontextprotocol.io) server over stdio. It rebuilds the graph when a file changes (parsing only the changed files), so its answers follow the code as the agent edits it.
 
-**Claude Code plugin** (the server plus a skill that tells Claude when to use it: impact before changing an entity, route or binding, checks and the tests to run after):
+**Claude Code plugin** (the server plus a skill that tells Claude when to use it: impact before changing an entity, route or binding, checks and the tests to run after). It needs nothing installed but Java, and finds the one Android Studio brings: the first time, it downloads the droidmap release that matches the plugin and checks its SHA-256.
 
 ```
 /plugin install droidmap --marketplace hussainshirazi/droidmap
@@ -176,7 +189,7 @@ Kotlin and Java are read with the Kotlin compiler's own parser (the one detekt a
 droidmap init   [path]                               # write the GitHub workflow and MCP config (never overwrites)
 droidmap check  [path] [--format text|json|sarif] [--fail-on error|warning|info|never] [--sarif FILE] [--base REF]
 droidmap impact <node> [path] [--depth N] [--json]   # what depends on a node
-droidmap diff   [path] [--base REF] [--depth N] [--format text|markdown|json|modules|tasks] [--task NAME]   # what a change touches
+droidmap diff   [path] [--base REF] [--depth N] [--format text|markdown|json|modules|tasks|tests] [--task NAME]   # what a change touches
 droidmap show   <node> [path] [--json]               # a node, its dependencies and its users
 droidmap find   <text> [path] [--limit N] [--json]   # search nodes
 droidmap report [path] [-o FILE]                     # the Markdown report, with Mermaid diagrams
@@ -214,12 +227,14 @@ Exit codes: 0 when done, 1 when `check` finds something at `--fail-on` or above 
 | [`hilt-missing-binding`](docs/rules/hilt-missing-binding.md) | warning | an injected project type with no `@Inject` constructor, `@Provides` or `@Binds` |
 | [`hilt-duplicate-binding`](docs/rules/hilt-duplicate-binding.md) | error | the same type and qualifier bound twice in one source set |
 | [`hilt-app-not-registered`](docs/rules/hilt-app-not-registered.md) | error | `@AndroidEntryPoint` classes, but the manifest's `<application android:name>` is not the `@HiltAndroidApp` class (or there is none): they crash when they open |
+| [`hilt-fragment-host`](docs/rules/hilt-fragment-host.md) | error | an `@AndroidEntryPoint` fragment hosted by an activity that is not one (through its navigation graph, layout or a fragment transaction): it crashes when the fragment is attached |
 | [`workmanager-setup`](docs/rules/workmanager-setup.md) | warning | a `@HiltWorker` that nothing gives `HiltWorkerFactory` to, or a `Configuration.Provider` that WorkManager never asks because its default initializer is still in the manifest |
 | [`koin-missing-definition`](docs/rules/koin-missing-definition.md) | warning | a type Koin is asked for (`get()`, `inject()`, `koinInject()`) that no Koin definition provides: `NoDefinitionFoundException` at runtime |
 | [`gradle-unknown-project`](docs/rules/gradle-unknown-project.md) | error | a project dependency on a module settings does not include |
 | [`gradle-forbidden-dependency`](docs/rules/gradle-forbidden-dependency.md) | error | a dependency your `[[gradle.forbid]]` rules ban |
 | [`gradle-cycle`](docs/rules/gradle-cycle.md) | error | modules that depend on each other in a cycle |
 | [`manifest-permission`](docs/rules/manifest-permission.md) | error | a permission not in your `allowed_permissions`, in a source manifest or added by a library to the merged one |
+| [`gson-model-not-kept`](docs/rules/gson-model-not-kept.md) | warning | a class Gson reads by reflection (`fromJson`, `TypeToken`, a Retrofit API with `GsonConverterFactory`) whose fields R8 renames in a minified release build: no `@SerializedName`, `@Keep` or keep rule. Debug works, release reads empty fields |
 
 ## Configuration
 
@@ -264,7 +279,7 @@ droidmap reads the source and never runs Gradle. That is what makes it take seco
 
 - Code a build generates (KSP, kapt) is not read. Safe Args does not need it: `HomeFragmentDirections.actionHomeToDetail()` is matched to its action by the names Safe Args gives the code it generates.
 - The permissions libraries add come from the resolved dependencies, so the merged manifest is read only when a build has produced it (`<module>/build/intermediates/merged_manifests/`, or the Action's `merge-manifest` input). A merged manifest older than the build files is flagged as such.
-- Names resolve by Kotlin's and Java's rules (imports, the package, enclosing classes and their supertypes), but without type inference, which needs the compiler and every dependency: a call on a variable, such as `repo.load()`, is not traced to the function it calls.
+- Names resolve by Kotlin's and Java's rules (imports, the package, enclosing classes and their supertypes), but without type inference, which needs the compiler and every dependency. A call on a variable, such as `repo.load()`, is traced when the variable's type is declared or comes from a constructor or a function's declared return type, not when it would have to be inferred (a lambda's `it`, a generic's type argument, a chain of library calls).
 - Values built at runtime are not followed: a route read from a `var`, or built in a loop. Constants, string templates, functions that return them and helpers up to five levels deep are.
 
 ## Contributing

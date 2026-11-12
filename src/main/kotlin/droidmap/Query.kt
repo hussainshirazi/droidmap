@@ -60,12 +60,20 @@ class Dependent(val id: String, val label: String, val kind: String, val depth: 
         "through_label" to throughLabel, "file" to file, "line" to line, "module" to module)
 }
 
+/** [callTests]: the test classes whose calls reach the node's code (see [Calls]). */
 class Impact(val node: Node, val depth: Int, val dependents: List<Dependent>, val modules: List<String>,
-             val moduleDependents: List<String>, val tests: List<Dependent>) {
+             val moduleDependents: List<String>, val tests: List<Dependent>, val callTests: List<TestRef> = emptyList()) {
     fun toMap() = linkedMapOf(
         "node" to linkedMapOf("id" to node.id, "label" to node.label, "kind" to node.kind, "file" to node.file, "line" to node.line, "module" to node.module),
         "depth" to depth, "dependents" to dependents.map { it.toMap() }, "modules" to modules,
-        "module_dependents" to moduleDependents, "tests" to tests.map { it.toMap() })
+        "module_dependents" to moduleDependents, "tests" to tests.map { it.toMap() }, "call_tests" to callTests.map { it.toMap() })
+}
+
+/** Everything that (transitively) depends on [id], nearest first, with the tests whose calls reach it when [calls] is given. */
+fun impact(g: Graph, id: String, depth: Int = 4, calls: Calls?): Impact {
+    val r = impact(g, id, depth)
+    val tests = calls?.let { it.testsReaching(it.keysFor(r.node)) } ?: return r
+    return Impact(r.node, r.depth, r.dependents, r.modules, r.moduleDependents, r.tests, tests)
 }
 
 /** Everything that (transitively) depends on [id], nearest first. */
@@ -141,7 +149,8 @@ fun formatImpact(r: Impact, limit: Int = 200, style: Style = Style.PLAIN): Strin
         }
         if (r.dependents.size > limit) lines.add("  ... ${r.dependents.size - limit} more")
     }
-    if (r.tests.isNotEmpty()) lines += listOf("", "Tests that cover it: " + r.tests.joinToString(", ") { it.label })
+    val tests = (r.tests.map { it.label } + r.callTests.map { it.name }).distinct().sorted()
+    if (tests.isNotEmpty()) lines += listOf("", "Tests that cover it (${tests.size}): " + tests.joinToString(", "))
     if (r.modules.isNotEmpty()) lines += listOf("", "Modules with impacted code: " + r.modules.joinToString(", "))
     if (r.moduleDependents.isNotEmpty()) lines.add("Modules that depend on ${n.module}: " + r.moduleDependents.joinToString(", "))
     return lines.joinToString("\n")

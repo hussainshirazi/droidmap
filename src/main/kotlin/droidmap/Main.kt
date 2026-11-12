@@ -24,9 +24,10 @@ private val USAGE = """
       impact <node> [path] [--depth N] [--json]   what depends on a node
       show   <node> [path] [--json]                a node, its dependencies and users
       find   <text> [path] [--limit N] [--json]
-      diff   [path] [--base REF] [--depth N] [--format text|markdown|json|modules|tasks] [--task NAME]
+      diff   [path] [--base REF] [--depth N] [--format text|markdown|json|modules|tasks|tests] [--task NAME]
                                                    what a change touches (default: uncommitted changes); modules and
-                                                   tasks list the modules whose tests it can break, for CI
+                                                   tasks list the modules whose tests it can break, tests the test
+                                                   classes whose calls reach it, as Gradle arguments, for CI
       report [path] [-o FILE]                      the Markdown report, with module and screen diagrams
       rules                                        list the rules and their default severities
       explain <rule>                               why a rule matters and how to fix what it finds
@@ -192,10 +193,13 @@ class Cli(private val out: PrintStream = System.out, private val err: PrintStrea
     private fun impactOrShow(rest: List<String>, impact: Boolean): Int {
         val a = parseArgs(rest, COMMON + setOf("--depth"), setOf("--json"))
         val text = a.positionals.firstOrNull() ?: throw UsageError("${if (impact) "impact" else "show"} needs a node")
-        val (g, _) = load(root(a.positionals.getOrNull(1)), a)
+        val r0 = root(a.positionals.getOrNull(1))
+        // From the source (not a saved --graph), the parsed code also tells which tests call into the node.
+        val built = if (impact && a.opt("--graph") == null) buildGraph(Project(r0, config(r0, a)), base(r0, a)) else null
+        val g = built?.graph ?: load(r0, a).first
         val node = pick(g, text) ?: return 2
         if (impact) {
-            val r = impact(g, node.id, a.opt("--depth")?.toIntOrNull() ?: 4)
+            val r = impact(g, node.id, a.opt("--depth")?.toIntOrNull() ?: 4, built?.let { Calls(it.code) })
             out.println(if (a.flag("--json")) jsonText(r.toMap()) else formatImpact(r, style = style))
         } else {
             val s = show(g, node.id)
@@ -220,7 +224,7 @@ class Cli(private val out: PrintStream = System.out, private val err: PrintStrea
     private fun diff(rest: List<String>): Int {
         val a = parseArgs(rest, setOf("--config", "--base", "--depth", "--format", "--task"), emptySet())
         val format = a.opt("--format") ?: "text"
-        if (format !in setOf("text", "markdown", "json", "modules", "tasks")) throw UsageError("--format is text, markdown, json, modules or tasks")
+        if (format !in setOf("text", "markdown", "json", "modules", "tasks", "tests")) throw UsageError("--format is text, markdown, json, modules, tasks or tests")
         val r = root(a.positionals.firstOrNull())
         val cfg = config(r, a)
         val base = base(r, a) ?: "HEAD".also { if (!Git.isCommit(r, it)) throw UsageError("$r is not in a git repository with a commit") }
@@ -236,8 +240,13 @@ class Cli(private val out: PrintStream = System.out, private val err: PrintStrea
         }
         val built = buildGraph(Project(r, cfg))
         val changes = readChanges(r, base)
-        val report = diffReport(built.graph, changes, runChecks(built.graph, cfg), built.project.readPaths(),
-            a.opt("--depth")?.toIntOrNull() ?: 4, baseGraph(built, changes))
+        if (format == "tests") {
+            // Only the unit test classes whose calls reach the changed code, as Gradle arguments.
+            val calls = Calls(built.code)
+            testTasks(calls.testsReaching(calls.changedKeys(changes)), a.opt("--task") ?: "test").takeIf { it.isNotEmpty() }?.let(out::println)
+            return 0
+        }
+        val report = diffReport(built, changes, runChecks(built.graph, cfg), a.opt("--depth")?.toIntOrNull() ?: 4)
         out.println(if (format == "json") jsonText(report.toMap()) else formatDiff(report, markdown = format == "markdown"))
         return 0
     }

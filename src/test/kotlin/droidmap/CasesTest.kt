@@ -363,6 +363,120 @@ class CasesTest {
     }
 
     @Test
+    fun testsThatReachAChangeThroughCalls() {
+        write(*app,
+            "app/src/main/kotlin/com/x/Data.kt" to """
+                package com.x
+                class Dao {
+                    fun read() = 1
+                    fun other() = 2
+                }
+                class Repo(private val dao: Dao) { fun load() = dao.read() }
+                interface Store { fun get(): Int }
+                class RealStore(private val dao: Dao) : Store { override fun get() = dao.other() }
+                class HomeViewModel(private val repo: Repo, private val store: Store) {
+                    private val helper by lazy { Repo(Dao()) }
+                    fun refresh() = repo.load()
+                    fun count() = store.get()
+                }""",
+            "app/src/test/kotlin/com/x/RepoTest.kt" to """
+                package com.x
+                import org.junit.Test
+                class RepoTest { @Test fun loads() { val repo = Repo(Dao()); repo.load() } }
+                class HomeViewModelTest { @Test fun refreshes() { HomeViewModel(Repo(Dao()), FakeStore()).refresh() } }
+                class CountTest { @Test fun counts() { HomeViewModel(Repo(Dao()), FakeStore()).count() } }
+                class FakeStore : Store { override fun get() = 0 }
+                class UnrelatedTest { @Test fun nothing() { } }""",
+            "app/src/test/java/com/x/RepoJavaTest.java" to """
+                package com.x;
+                import org.junit.Test;
+                public class RepoJavaTest {
+                    @Test public void loads() { Repo repo = new Repo(new Dao()); repo.load(); }
+                }""")
+        val code = Code.read(Project(tmp))
+        val calls = Calls(code)
+        fun testsFor(line: Int) = calls.testsReaching(calls.changedKeys(Changes("HEAD",
+            listOf(FileChange("app/src/main/kotlin/com/x/Data.kt", listOf(line..line), whole = false)), emptyList()))).map { it.name }
+        // Dao.read <- Repo.load <- HomeViewModel.refresh, through properties and locals typed by their declarations or constructors.
+        assertEquals(listOf("HomeViewModelTest", "RepoJavaTest", "RepoTest"), testsFor(3).sorted())
+        // RealStore.get is reached through the Store interface the ViewModel calls.
+        assertEquals(listOf("CountTest"), testsFor(8))
+        val refs = listOf(TestRef("com.x.ATest", "ATest", ":app", "a", false), TestRef("com.x.BTest", "BTest", ":core:data", "b", false),
+            TestRef("com.x.UiTest", "UiTest", ":app", "c", instrumented = true))
+        assertEquals(":app:testDebugUnitTest --tests com.x.ATest :core:data:testDebugUnitTest --tests com.x.BTest", testTasks(refs, "testDebugUnitTest"))
+    }
+
+    @Test
+    fun gsonModelsInAShrunkReleaseBuild() {
+        val api = "app/src/main/kotlin/com/x/api/Api.kt" to """
+            package com.x.api
+            import com.google.gson.Gson
+            import com.google.gson.annotations.SerializedName
+            import com.google.gson.reflect.TypeToken
+            import retrofit2.converter.gson.GsonConverterFactory
+            import retrofit2.http.GET
+
+            interface Api {
+                @GET("/top") suspend fun top(): Listing
+                class Listing(val data: ListingData)
+                class ListingData(val children: List<Post>, val after: String?)
+            }
+            class Post(@SerializedName("title") val title: String)
+            class Settings(val theme: String, @Transient val cache: Int)
+            class Named(@SerializedName("n") val n: Int)
+            fun read(json: String) = Gson().fromJson(json, Settings::class.java)
+            val type = object : TypeToken<List<Named>>() {}.type"""
+        val (_, f) = build(*app, api)
+        assertEquals(emptyList(), f.map { it.rule }, "release builds are not shrunk")
+        write("app/build.gradle.kts" to """plugins { id("com.android.application") }
+            android { buildTypes { release { isMinifyEnabled = true } } }""")
+        val found = runChecks(buildGraph(tmp)).filter { it.rule == "gson-model-not-kept" }
+        assertEquals(listOf("Listing", "ListingData", "Settings"), found.map { it.node!!.substringAfterLast('.') }.sorted())
+        assertTrue(found.single { it.node!!.endsWith("Settings") }.message.startsWith(
+            "Settings is read by Gson through reflection (fromJson in Api.kt), and release builds are shrunk by R8 (minifyEnabled in app/build.gradle.kts), " +
+                "but its fields theme have no @SerializedName"), found.toString())
+        // A keep rule for the package, or -dontobfuscate, protects them.
+        write("app/proguard-rules.pro" to "-keep class com.x.api.** { *; }")
+        assertEquals(emptyList(), runChecks(buildGraph(tmp)).filter { it.rule == "gson-model-not-kept" }.map { it.message })
+    }
+
+    @Test
+    fun hiltFragmentInAnActivityThatIsNotAnEntryPoint() {
+        val ns2 = """xmlns:android="http://schemas.android.com/apk/res/android" xmlns:app="http://schemas.android.com/apk/res-auto""""
+        val (_, f) = build(*app,
+            "app/src/main/AndroidManifest.xml" to """<manifest $ns2><application android:name=".App"/></manifest>""",
+            "app/src/main/kotlin/com/x/Screens.kt" to """
+                package com.x
+                import dagger.hilt.android.AndroidEntryPoint
+                import dagger.hilt.android.HiltAndroidApp
+                @HiltAndroidApp class App : Application()
+                @AndroidEntryPoint class HomeFragment : Fragment()
+                @AndroidEntryPoint class DetailFragment : DialogFragment()
+                class PlainFragment : Fragment()
+                class MainActivity : AppCompatActivity() {
+                    override fun onCreate(b: Bundle?) { val binding = ActivityMainBinding.inflate(layoutInflater) }
+                }
+                class SettingsActivity : AppCompatActivity() {
+                    fun show() { supportFragmentManager.beginTransaction().replace(R.id.c, DetailFragment()).commit() }
+                }
+                @AndroidEntryPoint open class BaseActivity : AppCompatActivity()
+                class OkActivity : BaseActivity() { override fun onCreate(b: Bundle?) { setContentView(R.layout.activity_ok) } }""",
+            "app/src/main/res/layout/activity_main.xml" to """<LinearLayout $ns2><include layout="@layout/content_main"/></LinearLayout>""",
+            "app/src/main/res/layout/content_main.xml" to """
+                <androidx.fragment.app.FragmentContainerView $ns2 android:name="androidx.navigation.fragment.NavHostFragment" app:navGraph="@navigation/main"/>""",
+            "app/src/main/res/layout/activity_ok.xml" to """<fragment $ns2 android:name="com.x.HomeFragment"/>""",
+            "app/src/main/res/navigation/main.xml" to """
+                <navigation $ns2 app:startDestination="@id/home">
+                  <fragment android:id="@+id/home" android:name="com.x.HomeFragment"/>
+                  <fragment android:id="@+id/plain" android:name="com.x.PlainFragment"/>
+                </navigation>""")
+        val hosts = f.filter { it.rule == "hilt-fragment-host" }.map { it.message.substringBefore(", but") }
+        assertEquals(listOf(
+            "MainActivity hosts HomeFragment (an @AndroidEntryPoint fragment) through the navigation graph main in content_main.xml",
+            "SettingsActivity hosts DetailFragment (an @AndroidEntryPoint fragment) through a fragment transaction (line 12)"), hosts.sorted())
+    }
+
+    @Test
     fun safeArgsDirectionsAndPopOnlyActions() {
         val (g, f) = build(*app,
             "app/src/main/res/navigation/nav_graph.xml" to """

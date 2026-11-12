@@ -33,6 +33,18 @@ jobs:
           name: droidmap.jar
           path: build/libs/droidmap.jar
 
+  # The Gradle plugin (gradle-plugin/), run by real Gradle builds (9, and 8 as most Android projects use) with the jar built here.
+  gradle-plugin:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: gradle/actions/setup-gradle@v4
+      - run: chmod +x gradlew && ./gradlew fatJar && ./gradlew -p gradle-plugin test
+
   # The GitHub Action in action.yml, run on the sample with the jar built here.
   action:
     strategy:
@@ -65,6 +77,28 @@ jobs:
       - name: diff works in a shallow checkout
         shell: bash
         run: java -jar build/libs/droidmap.jar diff src/test/resources/sample --base HEAD
+      # The Claude Code plugin's launcher downloads the release named in plugin.json and serves MCP.
+      - name: The plugin starts droidmap with nothing installed but Java (macOS, Linux)
+        if: runner.os != 'Windows'
+        shell: bash
+        env:
+          CLAUDE_PLUGIN_ROOT: ${{ github.workspace }}/plugin
+          CLAUDE_PLUGIN_DATA: ${{ runner.temp }}/plugin-data
+        run: |
+          plugin/launcher/droidmap --version
+          printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"ci","version":"1"}}}' \
+            | plugin/launcher/droidmap mcp src/test/resources/sample | grep -q '"serverInfo"'
+      - name: The plugin starts droidmap with nothing installed but Java (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          CLAUDE_PLUGIN_ROOT: ${{ github.workspace }}/plugin
+          CLAUDE_PLUGIN_DATA: ${{ runner.temp }}/plugin-data
+        run: |
+          plugin\launcher\droidmap.cmd --version
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          $out = '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"ci","version":"1"}}}' | plugin\launcher\droidmap.cmd mcp src/test/resources/sample
+          if (-not ($out -match '"serverInfo"')) { Write-Output $out; exit 1 }
 
   # The Docker image and the MCP Registry entry (server.json) that releases publish.
   container:

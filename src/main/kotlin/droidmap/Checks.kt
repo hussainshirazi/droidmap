@@ -19,6 +19,7 @@ enum class Rule(val id: String, val severity: String, val description: String) {
     NAV_UNREACHABLE("nav-unreachable", "warning", "A destination that nothing navigates to, starts at, deep-links to, opens from a menu or references"),
     NAV_DEEPLINK_NOT_IN_MANIFEST("nav-deeplink-not-in-manifest", "warning", "A navigation deep link whose scheme and host no activity's intent filter accepts, so the link does not open the app"),
     HILT_APP_NOT_REGISTERED("hilt-app-not-registered", "error", "@AndroidEntryPoint classes without a @HiltAndroidApp Application that the manifest names: a crash when they open"),
+    HILT_FRAGMENT_HOST("hilt-fragment-host", "error", "An @AndroidEntryPoint fragment hosted by an activity that is not @AndroidEntryPoint: a crash when the fragment is attached"),
     WORKMANAGER_SETUP("workmanager-setup", "warning", "@HiltWorker classes that nothing gives HiltWorkerFactory to, or a Configuration.Provider that the default WorkManager initializer bypasses"),
     HILT_MISSING_BINDING("hilt-missing-binding", "warning", "An injected project type with no @Inject constructor, @Provides or @Binds"),
     HILT_DUPLICATE_BINDING("hilt-duplicate-binding", "error", "The same type and qualifier is bound twice in one source set"),
@@ -27,6 +28,7 @@ enum class Rule(val id: String, val severity: String, val description: String) {
     GRADLE_FORBIDDEN_DEPENDENCY("gradle-forbidden-dependency", "error", "A module dependency banned by a [[gradle.forbid]] rule"),
     GRADLE_CYCLE("gradle-cycle", "error", "Modules that depend on each other in a cycle"),
     MANIFEST_PERMISSION("manifest-permission", "error", "A permission (in a source manifest, or added by a library to the merged one) that is not in [manifest] allowed_permissions"),
+    GSON_MODEL_NOT_KEPT("gson-model-not-kept", "warning", "A class Gson reads by reflection, in a release build that R8 shrinks, with fields that no @SerializedName, @Keep or keep rule protects"),
     ;
 
     /** The rule's page on GitHub. */
@@ -51,7 +53,8 @@ private fun finding(rule: Rule, message: String, file: String? = null, line: Int
     Finding(rule.id, rule.severity, message, file, line, node)
 
 fun runChecks(g: Graph, config: Config = Config()): List<Finding> {
-    val all = room(g) + nav(g) + deepLinks(g) + di(g) + hiltApp(g) + workManager(g) + gradle(g, config) + manifest(g, config)
+    val all = room(g) + nav(g) + deepLinks(g) + di(g) + hiltApp(g) + fragmentHosts(g) + workManager(g) + gradle(g, config) + manifest(g, config) +
+        gsonModels(g)
     val out = ArrayList<Finding>()
     for (f in all) {
         val sev = config.severities[f.rule] ?: f.severity
@@ -297,6 +300,27 @@ private fun hiltApp(g: Graph): List<Finding> {
                 (if (named.isNotEmpty()) " (it names ${named.joinToString(", ")})" else "") + ", so $crash",
             app.file, app.line, app.id)
     }
+}
+
+/** Hilt attaches an @AndroidEntryPoint fragment only to an @AndroidEntryPoint activity. */
+private fun fragmentHosts(g: Graph): List<Finding> = g.meta.maps("hilt_fragment_hosts").map { h ->
+    val activity = h.str("activity")!!.substringAfterLast('.')
+    val fragment = h.str("fragment")!!.substringAfterLast('.')
+    finding(Rule.HILT_FRAGMENT_HOST,
+        "$activity hosts $fragment (an @AndroidEntryPoint fragment) through ${h.str("via")}, but $activity is not @AndroidEntryPoint: " +
+            "Hilt throws IllegalStateException (\"Hilt Fragments must be attached to an @AndroidEntryPoint Activity\") when $fragment " +
+            "is attached. Annotate $activity with @AndroidEntryPoint", h.str("file"), h.int("line"), "class::${h.str("activity")}")
+}
+
+/** R8 renames fields, and Gson finds them by name. */
+private fun gsonModels(g: Graph): List<Finding> = g.meta.maps("gson_unkept_models").map { m ->
+    val fields = (m["fields"] as? List<*>)?.map { it.toString() } ?: emptyList()
+    val shown = fields.take(4).joinToString(", ") + if (fields.size > 4) " and ${fields.size - 4} more" else ""
+    finding(Rule.GSON_MODEL_NOT_KEPT,
+        "${m.str("label")} is read by Gson through reflection (${m.str("used_in")}), and release builds are shrunk by R8 " +
+            "(minifyEnabled in ${m.str("minify")}), but its fields $shown have no @SerializedName, and no @Keep or keep rule protects them: " +
+            "R8 renames them, so in release builds they are left empty when JSON is read and written under the wrong names. " +
+            "Add @SerializedName to each field, @Keep to the class, or a -keep rule", m.str("file"), m.int("line"), "class::${m.str("class")}")
 }
 
 /** WorkManager makes @HiltWorker classes only through HiltWorkerFactory, and asks the Application for it only once its own initializer is removed. */

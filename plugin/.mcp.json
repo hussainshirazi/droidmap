@@ -1,7 +1,7 @@
 {
   "mcpServers": {
     "droidmap": {
-      "command": "droidmap",
+      "command": "${CLAUDE_PLUGIN_ROOT}/launcher/droidmap",
       "args": ["mcp"]
     }
   }

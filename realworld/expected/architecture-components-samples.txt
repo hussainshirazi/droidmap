@@ -1,3 +1,7 @@
+gson-model-not-kept PagingWithNetworkSample/app/src/main/java/com/android/example/paging/pagingwithnetwork/reddit/api/RedditApi.kt:44
+gson-model-not-kept PagingWithNetworkSample/app/src/main/java/com/android/example/paging/pagingwithnetwork/reddit/api/RedditApi.kt:46
+gson-model-not-kept PagingWithNetworkSample/app/src/main/java/com/android/example/paging/pagingwithnetwork/reddit/api/RedditApi.kt:52
+gson-model-not-kept PagingWithNetworkSample/lib/src/main/java/com/android/example/paging/pagingwithnetwork/reddit/vo/RedditPost.kt:27
 room-destructive-fallback GithubBrowserSample/app/src/main/java/com/android/example/github/di/AppModule.kt:50
 room-destructive-fallback PagingWithNetworkSample/app/src/main/java/com/android/example/paging/pagingwithnetwork/reddit/db/RedditDb.kt:43
 room-migration-path PersistenceMigrationsSample/app/src/room3/java/com/example/android/persistence/migrations/UsersDatabase.java:33

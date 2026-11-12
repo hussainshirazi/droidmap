@@ -121,6 +121,20 @@ class Index(sources: List<Source>) {
         return null
     }
 
+    /** The declarations named [fq] exactly ("com.x.Repo.load"): functions (overloads) and properties. */
+    fun membersOf(fq: String): List<Decl> = members[fq] ?: emptyList()
+
+    /** The named functions around [el], innermost first. */
+    fun fnsAround(el: PsiElement?): List<Fn> {
+        val out = ArrayList<Fn>()
+        var p = el
+        while (p != null && p !is PsiFile) {
+            fnByPsi[p]?.let { out.add(it) }
+            p = p.parent
+        }
+        return out
+    }
+
     /** The nearest local val or var named [name] declared before [at] in a function around it. */
     fun local(name: String, at: PsiElement): Field? {
         var p: PsiElement? = at.parent

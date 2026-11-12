@@ -117,8 +117,17 @@ fun affectedModules(g: Graph, p: Project, changes: Changes): List<String> {
 class DiffReport(
     val base: String, val files: List<String>, val read: Int, val deleted: List<String>,
     val changed: List<Node>, val affected: List<Dependent>, val modules: List<String>, val findings: List<Finding>,
-    val removed: List<Node> = emptyList(),
+    val removed: List<Node> = emptyList(), val tests: List<TestRef> = emptyList(),
 )
+
+/**
+ * The unit test classes that reach [changes] through calls, as Gradle arguments that run only them:
+ * `:core:data:testDebugUnitTest --tests com.x.RepoTest :app:testDebugUnitTest --tests ...` (empty when none).
+ */
+fun testTasks(tests: List<TestRef>, task: String): String =
+    tests.filter { !it.instrumented && it.module != null }.groupBy { it.module!! }.toSortedMap().entries.joinToString(" ") { (m, ts) ->
+        "${if (m == ":") "" else m}:$task " + ts.joinToString(" ") { "--tests ${it.fq}" }
+    }
 
 private fun Node.end(): Int = attrs.int("end_line") ?: line!!
 
@@ -131,7 +140,9 @@ private fun contains(a: Node, b: Node) = a.line!! <= b.line!! && b.end() <= a.en
  * The nodes that depend on a changed one are affected. With [base] (the graph at the base, see [baseGraph]),
  * the declarations the change removed are listed too, and what depended on them is affected.
  */
-fun diffReport(g: Graph, changes: Changes, findings: List<Finding>, read: Set<String>, depth: Int = 4, base: Graph? = null): DiffReport {
+fun diffReport(
+    g: Graph, changes: Changes, findings: List<Finding>, read: Set<String>, depth: Int = 4, base: Graph? = null, tests: List<TestRef> = emptyList(),
+): DiffReport {
     val byFile = changes.files.associateBy { it.path }
     val hit = LinkedHashSet<Node>()
     for ((file, nodes) in g.nodes.values.filter { it.kind != "ref" && it.file in byFile }.groupBy { it.file!! }) {
@@ -167,7 +178,14 @@ fun diffReport(g: Graph, changes: Changes, findings: List<Finding>, read: Set<St
     val files = changes.files.map { it.path }.sorted()
     return DiffReport(changes.base, files, files.count { it in read }, changes.deleted.sorted(), changed,
         affected.values.sortedWith(compareBy({ it.depth }, { it.kind }, { it.label })), modules.map { g.label(it) },
-        findings.filter { it.file in byFile }, removed)
+        findings.filter { it.file in byFile }, removed, tests)
+}
+
+/** The diff report for [built], with the base commit's graph when the change removed code and the tests that reach the change. */
+fun diffReport(built: Built, changes: Changes, findings: List<Finding>, depth: Int = 4): DiffReport {
+    val calls = Calls(built.code)
+    return diffReport(built.graph, changes, findings, built.project.readPaths(), depth, baseGraph(built, changes),
+        calls.testsReaching(calls.changedKeys(changes)))
 }
 
 /**
@@ -239,9 +257,11 @@ fun formatDiff(r: DiffReport, markdown: Boolean): String {
                 out.add(if (markdown) "| $k | $list |" else "  $k: $list")
             }
         }
-        val tests = (r.changed.filter { it.kind == "test" }.map { it.label } + r.affected.filter { it.kind == "test" }.map { it.label }).distinct().sorted()
-        if (tests.isNotEmpty()) out += listOf("", "${b}Tests that cover it:$b " + names(tests, markdown))
     }
+    // Tests from the graph (migration tests, tests that inject a class) and those whose calls reach the changed code.
+    val tests = (r.changed.filter { it.kind == "test" }.map { it.label } + r.affected.filter { it.kind == "test" }.map { it.label } +
+        r.tests.map { it.name }).distinct().sorted()
+    if (tests.isNotEmpty()) out += listOf("", "${b}Tests that cover it$b (${tests.size}): " + names(tests, markdown))
     if (r.findings.isNotEmpty()) {
         out += listOf("", "${b}Findings in the changed files$b (${r.findings.size}):")
         for (f in r.findings.take(SHOWN)) {
@@ -259,7 +279,7 @@ fun DiffReport.toMap(): Map<String, Any?> = linkedMapOf(
     "base" to base, "files" to files, "read" to read, "deleted" to deleted,
     "changed" to changed.map { linkedMapOf("id" to it.id, "label" to it.label, "kind" to it.kind, "file" to it.file, "line" to it.line) },
     "removed" to removed.map { linkedMapOf("id" to it.id, "label" to it.label, "kind" to it.kind, "file" to it.file, "line" to it.line) },
-    "affected" to affected.map { it.toMap() }, "modules" to modules, "findings" to findings.map { it.toMap() },
+    "affected" to affected.map { it.toMap() }, "modules" to modules, "tests" to tests.map { it.toMap() }, "findings" to findings.map { it.toMap() },
 )
 
 /** The first line of droidmap's pull request comment, so the GitHub Action can find and update it. */

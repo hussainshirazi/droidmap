@@ -14,7 +14,7 @@ Call `droidmap_impact` (or `droidmap impact <name>`) on what you are about to ch
 ## After changing code
 
 1. `droidmap_check` (or `droidmap check`): fix every error before you finish. For a finding you do not understand, `droidmap_explain` with its rule (or `droidmap explain <rule>`) says why it matters and how to fix it.
-2. `droidmap_diff` (or `droidmap diff`): what your changes touch, and the tests to run. Run those tests. When you removed something, it lists what still depended on it: update those too.
+2. `droidmap_diff` (or `droidmap diff`): what your changes touch, and the tests that cover it ("Tests that cover it": the test classes whose calls reach the changed code). Run those tests; in a shell, `./gradlew $(droidmap diff --format tests --task testDebugUnitTest)` runs exactly them. When you removed something, it lists what still depended on it: update those too.
 
 ## Rules that need care
 

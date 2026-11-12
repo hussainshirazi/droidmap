@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.3.0
+
+- The Claude Code plugin needs nothing installed but Java, and finds Android Studio's: the first time, it downloads the droidmap release that matches the plugin and checks its SHA-256.
+- Tests that reach a change: droidmap follows calls through what the code declares (a property's or parameter's type, a constructor, a function's return type, `by viewModels<X>()`), and a call on an interface reaches its implementations. `diff` and `impact` list the test classes whose calls reach the changed code, and `diff --format tests` prints them as Gradle arguments (`:core:data:testDebugUnitTest --tests com.example.RepoTest`) to run only those.
+- New rules: `hilt-fragment-host` (an `@AndroidEntryPoint` fragment in an activity that is not one, through its navigation graph, layout or a fragment transaction: a crash when the fragment is attached) and `gson-model-not-kept` (a class Gson reads by reflection, with fields that R8 renames in a minified release build: debug works, release reads empty fields). On Google's architecture-components-samples it finds four such classes in PagingWithNetworkSample, whose release build is minified.
+- A Gradle plugin, `io.github.hussainshirazi.droidmap`: `./gradlew droidmapCheck`, with `failOn` and `mergedManifest` (run each release manifest merge first, so library permissions are checked too). It runs on Gradle 8 and 9.
+- Layout XML files and ProGuard rules are read.
+
 ## 0.2.1 (2026-11-12)
 
 - The GitHub Action's description is short enough for the GitHub Marketplace, so the Action can be listed there.
