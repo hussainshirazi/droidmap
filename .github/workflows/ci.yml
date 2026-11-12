@@ -22,7 +22,7 @@ jobs:
         with:
           distribution: temurin
           java-version: ${{ matrix.java }}
-      - uses: gradle/actions/setup-gradle@v4
+      - uses: gradle/actions/setup-gradle@v6
       - run: chmod +x gradlew && ./gradlew test fatJar
         shell: bash
       - run: java -jar build/libs/droidmap.jar --version
@@ -42,7 +42,7 @@ jobs:
         with:
           distribution: temurin
           java-version: "17"
-      - uses: gradle/actions/setup-gradle@v4
+      - uses: gradle/actions/setup-gradle@v6
       - run: chmod +x gradlew && ./gradlew fatJar && ./gradlew -p gradle-plugin test
 
   # The GitHub Action in action.yml, run on the sample with the jar built here.
@@ -58,7 +58,7 @@ jobs:
         with:
           distribution: temurin
           java-version: "17"
-      - uses: gradle/actions/setup-gradle@v4
+      - uses: gradle/actions/setup-gradle@v6
       - run: chmod +x gradlew && ./gradlew fatJar
         shell: bash
       - uses: ./
@@ -109,7 +109,7 @@ jobs:
         with:
           distribution: temurin
           java-version: "17"
-      - uses: gradle/actions/setup-gradle@v4
+      - uses: gradle/actions/setup-gradle@v6
       - run: chmod +x gradlew && ./gradlew fatJar
       - run: docker build -t droidmap .
       - name: The image checks a mounted project
