@@ -6,3 +6,4 @@ out/
 *.iml
 droidmap-out/
 *.stackdump
+plugin/evals/results/

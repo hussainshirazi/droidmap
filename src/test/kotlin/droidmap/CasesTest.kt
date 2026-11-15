@@ -15,14 +15,7 @@ class CasesTest {
     @TempDir
     lateinit var tmp: Path
 
-    private fun write(vararg files: Pair<String, String>): Path {
-        for ((rel, text) in files) {
-            val f = tmp.resolve(rel)
-            Files.createDirectories(f.parent)
-            Files.writeString(f, text.trimIndent() + "\n")
-        }
-        return tmp
-    }
+    private fun write(vararg files: Pair<String, String>): Path = TestProject(tmp).write(*files).root
 
     /** The graph and the findings for a project made of [files]. */
     private fun build(vararg files: Pair<String, String>): Pair<Graph, List<Finding>> {
@@ -283,19 +276,10 @@ class CasesTest {
         assertEquals(2, run("check", root.toString(), "--base", "no-such-ref"))
     }
 
-    private fun git(root: Path, vararg args: String) {
-        val proc = ProcessBuilder(listOf("git", "-C", root.toString(), "-c", "user.name=t", "-c", "user.email=t@example.com",
-            "-c", "commit.gpgsign=false") + args).redirectErrorStream(true).start()
-        val out = proc.inputStream.readBytes().toString(Charsets.UTF_8)
-        assertEquals(0, proc.waitFor(), out)
-    }
+    private fun git(root: Path, vararg args: String) = TestProject(root).git(*args)
 
     /** A git repository at [root] with everything in it committed. */
-    private fun commitAll(root: Path) {
-        git(root, "init", "-q")
-        git(root, "add", ".")
-        git(root, "commit", "-q", "-m", "base")
-    }
+    private fun commitAll(root: Path) { TestProject(root).commitAll() }
 
     @Test
     fun parsesAGitDiff() {

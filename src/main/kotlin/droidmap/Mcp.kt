@@ -20,8 +20,10 @@ val TOOLS: List<Map<String, Any?>> = listOf(
         "description" to "Run droidmap's Android rules (Room migration paths, schema files, entities that no longer match the " +
             "current version's schema so the version must be bumped, and migration tests; navigation " +
             "targets with no destination and deep links no intent filter accepts; Hilt missing or duplicate bindings and the " +
-            "@HiltAndroidApp Application; WorkManager with Hilt; Koin definitions; Gradle module rules and cycles; manifest " +
-            "permission allowlist) and list the findings. droidmap_explain says how to fix one.",
+            "@HiltAndroidApp Application, @HiltViewModels got without Hilt's factory; WorkManager with Hilt, worker inputs; Koin " +
+            "definitions; components missing from the manifest, Intent extras no sender puts, notification channels never created; " +
+            "DataStores and Room databases built more than once; route properties without a NavType; Gradle module rules and cycles; " +
+            "manifest permission allowlist) and list the findings. droidmap_explain says how to fix one.",
         "inputSchema" to mapOf("type" to "object", "properties" to mapOf(
             "min_severity" to mapOf("type" to "string", "enum" to listOf("error", "warning", "info"),
                 "description" to "Only show findings this severe or worse (default: info).")))),
@@ -59,7 +61,8 @@ val TOOLS: List<Map<String, Any?>> = listOf(
 private class ToolError(message: String) : Exception(message)
 
 /**
- * A Model Context Protocol server over stdio (JSON-RPC 2.0, one message per line). Tools only.
+ * A Model Context Protocol server (JSON-RPC 2.0): over stdio with [serve], one message per line, or over HTTP with
+ * [McpHttpServer], which passes each message to [reply]. Tools only.
  * The graph is rebuilt when a scanned file or the config changes.
  */
 class McpServer(private val root: Path, private val configPath: Path? = null, private val log: PrintStream = System.err) {
@@ -189,23 +192,30 @@ class McpServer(private val root: Path, private val configPath: Path? = null, pr
     private fun error(id: Any?, code: Int, message: String) =
         linkedMapOf("jsonrpc" to "2.0", "id" to id, "error" to mapOf("code" to code, "message" to message))
 
+    /** The JSON text to answer one JSON-RPC message (or batch) with, or null when it needs no answer (a notification). Any transport uses it. */
+    @Synchronized
+    fun reply(text: String): String? {
+        val reply: Any? = try {
+            when (val msg: JsonElement = compactJson.parseToJsonElement(text)) {
+                is JsonArray -> msg.mapNotNull { handle(fromJson(it)) }.ifEmpty { null }
+                is JsonObject -> handle(fromJson(msg))
+                else -> error(null, -32600, "Invalid Request")
+            }
+        } catch (e: Exception) {
+            error(null, -32700, "Parse error")
+        }
+        return reply?.let { jsonText(it, pretty = false) }
+    }
+
+    /** Serves over stdio: one message per line. */
     fun serve(input: java.io.InputStream = System.`in`, output: OutputStream = System.out): Int {
         log.println("droidmap $VERSION MCP server for $root")
         val reader = BufferedReader(InputStreamReader(input, Charsets.UTF_8))
         while (true) {
             val line = reader.readLine() ?: break
             if (line.isBlank()) continue
-            val reply: Any? = try {
-                when (val msg: JsonElement = compactJson.parseToJsonElement(line)) {
-                    is JsonArray -> msg.mapNotNull { handle(fromJson(it)) }.ifEmpty { null }
-                    is JsonObject -> handle(fromJson(msg))
-                    else -> error(null, -32600, "Invalid Request")
-                }
-            } catch (e: Exception) {
-                error(null, -32700, "Parse error")
-            }
-            if (reply != null) {
-                output.write((jsonText(reply, pretty = false) + "\n").toByteArray(Charsets.UTF_8))
+            reply(line)?.let {
+                output.write((it + "\n").toByteArray(Charsets.UTF_8))
                 output.flush()
             }
         }

@@ -18,6 +18,13 @@ fun lineage(index: droidmap.Index, t: Type): List<Type> {
 /** The simple names of every supertype of [t] and its project supertypes, framework ones included (Fragment, AppCompatActivity). */
 fun superNames(index: droidmap.Index, t: Type): Set<String> = lineage(index, t).flatMap { x -> x.supers.map { it.type.simple } }.toSet()
 
+/** The constants of an enum class, in order: Kotlin entries or Java enum constants. */
+fun enumConstants(t: Type): List<String> = when (val psi = t.psi) {
+    is org.jetbrains.kotlin.psi.KtClass -> psi.declarations.filterIsInstance<org.jetbrains.kotlin.psi.KtEnumEntry>().mapNotNull { it.name }
+    is org.jetbrains.kotlin.com.intellij.psi.PsiClass -> psi.fields.filterIsInstance<org.jetbrains.kotlin.com.intellij.psi.PsiEnumConstant>().map { it.name }
+    else -> emptyList()
+}
+
 /** An attribute that is set only when true, so graphs stay small. */
 fun flag(b: Boolean): Boolean? = if (b) true else null
 

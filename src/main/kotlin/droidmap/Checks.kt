@@ -32,6 +32,16 @@ enum class Rule(val id: String, val severity: String, val description: String) {
     MANIFEST_PERMISSION("manifest-permission", "error", "A permission (in a source manifest, or added by a library to the merged one) that is not in [manifest] allowed_permissions"),
     MOSHI_MODEL_NOT_KEPT("moshi-model-not-kept", "warning", "A class Moshi reads by reflection (no @JsonClass(generateAdapter = true)), in a release build that R8 shrinks, with fields that no @Json(name), @Keep or keep rule protects"),
     GSON_MODEL_NOT_KEPT("gson-model-not-kept", "warning", "A class Gson reads by reflection, in a release build that R8 shrinks, with fields that no @SerializedName, @Keep or keep rule protects"),
+    ROOM_ENUM_CONSTANT_REMOVED("room-enum-constant-removed", "error", "With --base: an enum constant removed or renamed while Room stores the enum by name, so rows saved with it crash when read"),
+    ROOM_DATABASE_NOT_SINGLETON("room-database-not-singleton", "warning", "A Room database built in a DI provider that is not a singleton: each injection opens another instance, and their Flows miss each other's writes"),
+    DATASTORE_DUPLICATE_FILE("datastore-duplicate-file", "error", "Two DataStores on one file (two delegates with one name, or one built in a provider that is not a singleton): IllegalStateException"),
+    NAV_ROUTE_TYPE_UNSUPPORTED("nav-route-type-unsupported", "error", "A type-safe route property that Navigation has no NavType for, with no typeMap: IllegalArgumentException when it is registered or read"),
+    HILT_VIEWMODEL_FACTORY("hilt-viewmodel-factory", "error", "A @HiltViewModel got without Hilt's factory (viewModel() in a navigation destination, by viewModels() outside an @AndroidEntryPoint): a crash when it is created"),
+    COMPONENT_NOT_IN_MANIFEST("component-not-in-manifest", "error", "An activity, service or receiver that the code sends an explicit Intent to, but that no AndroidManifest.xml declares"),
+    INTENT_EXTRA_MISSING("intent-extra-missing", "warning", "A component reads an Intent extra that none of the Intents sent to it put, so it is always null"),
+    WORKER_INPUT_MISSING("worker-input-missing", "warning", "A worker reads an input key that none of its work requests put, so it is always null"),
+    WORKMANAGER_WORKER_RENAMED("workmanager-worker-renamed", "warning", "With --base: a Worker renamed, moved or deleted while users have its periodic work saved, which then fails every time it runs"),
+    NOTIFICATION_CHANNEL_MISSING("notification-channel-missing", "warning", "A notification built for a channel id that the app never creates: Android 8 and later do not show it"),
     ;
 
     /** The rule's page on GitHub. */
@@ -57,12 +67,12 @@ data class Finding(val rule: String, var severity: String, val message: String, 
         "rule" to rule, "severity" to severity, "message" to message, "file" to file, "line" to line, "node" to node)
 }
 
-private fun finding(rule: Rule, message: String, file: String? = null, line: Int? = null, node: String? = null, key: String? = null) =
+internal fun finding(rule: Rule, message: String, file: String? = null, line: Int? = null, node: String? = null, key: String? = null) =
     Finding(rule.id, rule.severity, message, file, line, node, key)
 
 fun runChecks(g: Graph, config: Config = Config()): List<Finding> {
     val all = room(g) + nav(g) + navArguments(g) + deepLinks(g) + di(g) + hiltApp(g) + fragmentHosts(g) + workManager(g) + gradle(g, config) + manifest(g, config) +
-        gsonModels(g) + moshiModels(g)
+        gsonModels(g) + moshiModels(g) + wiring(g)
     val out = ArrayList<Finding>()
     for (f in all) {
         val sev = config.severities[f.rule] ?: f.severity

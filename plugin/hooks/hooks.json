@@ -1,0 +1,28 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/launcher/droidmap",
+            "args": ["hook", "session-start"],
+            "timeout": 300
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/launcher/droidmap",
+            "args": ["hook", "stop"],
+            "timeout": 300
+          }
+        ]
+      }
+    ]
+  }
+}

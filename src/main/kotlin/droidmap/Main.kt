@@ -20,7 +20,8 @@ private val USAGE = """
       init   [path]                                write the GitHub workflow and MCP config (never overwrites)
       build  [path] [-o DIR] [--node-link]        scan and write droidmap-out/graph.json and REPORT.md
       check  [path] [--format text|json|sarif] [--fail-on error|warning|info|never] [--sarif FILE]
-             [--base REF]                           also compare Room schema files with a git commit
+             [--base REF]                           also compare with a git commit: Room schema files, enum
+                                                   constants Room stores, periodic workers
              [--update-baseline] [--baseline FILE] [--no-baseline]
                                                    accept today's findings (written to droidmap-baseline.json),
                                                    so that later checks report only new ones
@@ -34,7 +35,9 @@ private val USAGE = """
       report [path] [-o FILE]                      the Markdown report, with module and screen diagrams
       rules                                        list the rules and their default severities
       explain <rule>                               why a rule matters and how to fix what it finds
-      mcp    [path]                                run as an MCP server over stdio
+      mcp    [path] [--http PORT]                  run as an MCP server over stdio, or over HTTP on 127.0.0.1:PORT
+                                                   (for Gemini in Android Studio)
+      hook   session-start|stop                    the Claude Code plugin's hooks (the hook's JSON on stdin)
 
     Common options: --config FILE (default <path>/.droidmap.toml), --graph FILE (use a saved graph.json)
 
@@ -266,7 +269,7 @@ class Cli(private val out: PrintStream = System.out, private val err: PrintStrea
             }
             return 0
         }
-        val built = buildGraph(Project(r, cfg))
+        val built = buildGraph(Project(r, cfg), base)
         val changes = readChanges(r, base)
         if (format == "tests") {
             // Only the unit test classes whose calls reach the changed code, as Gradle arguments.
@@ -311,12 +314,26 @@ class Cli(private val out: PrintStream = System.out, private val err: PrintStrea
     }
 
     private fun mcp(rest: List<String>): Int {
-        val a = parseArgs(rest, setOf("--config"), emptySet())
+        val a = parseArgs(rest, setOf("--config", "--http"), emptySet())
         val r = root(a.positionals.firstOrNull())
+        val server = McpServer(r, a.opt("--config")?.let { Path.of(it) })
+        a.opt("--http")?.let { port ->
+            val p = port.toIntOrNull()?.takeIf { it in 0..65535 } ?: throw UsageError("--http takes a port number, such as 3920")
+            val http = try { McpHttpServer(server, p).start() } catch (e: java.io.IOException) { throw UsageError("cannot listen on port $p: ${e.message}") }
+            err.println("droidmap $VERSION MCP server for $r at ${http.url}")
+            err.println("Android Studio (Settings > Tools > AI > MCP Servers): {\"mcpServers\": {\"droidmap\": {\"httpUrl\": \"${http.url}\"}}}")
+            Thread.currentThread().join() // serves until the process is stopped
+        }
         // The protocol owns stdout: anything else that prints goes to stderr.
         val protocol = FileOutputStream(FileDescriptor.out)
         System.setOut(PrintStream(FileOutputStream(FileDescriptor.err), true, Charsets.UTF_8))
-        return McpServer(r, a.opt("--config")?.let { Path.of(it) }).serve(System.`in`, protocol)
+        return server.serve(System.`in`, protocol)
+    }
+
+    /** `hook session-start|stop`: the Claude Code plugin's hooks, with the hook's JSON on stdin (see [Hooks]). */
+    private fun hook(rest: List<String>): Int {
+        val event = parseArgs(rest, emptySet(), emptySet()).positionals.firstOrNull() ?: throw UsageError("hook needs session-start or stop")
+        return Hooks(Hooks.dataDir(), out, err).run(event, String(System.`in`.readBytes(), Charsets.UTF_8))
     }
 
     private companion object {
@@ -324,7 +341,7 @@ class Cli(private val out: PrintStream = System.out, private val err: PrintStrea
         val COMMANDS: Map<String, Cli.(List<String>) -> Int> = mapOf(
             "init" to { init(it) }, "build" to { build(it) }, "check" to { check(it) }, "impact" to { impactOrShow(it, impact = true) },
             "show" to { impactOrShow(it, impact = false) }, "find" to { find(it) }, "diff" to { diff(it) },
-            "report" to { report(it) }, "rules" to { rules() }, "explain" to { explain(it) }, "mcp" to { mcp(it) },
+            "report" to { report(it) }, "rules" to { rules() }, "explain" to { explain(it) }, "mcp" to { mcp(it) }, "hook" to { hook(it) },
         )
     }
 }

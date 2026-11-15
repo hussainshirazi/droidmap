@@ -228,6 +228,12 @@ class NavScan(private val p: Project, private val code: Code, private val g: Gra
                 "arguments" to arguments) + common)
         typeDests[fq] = nid
         if (d != null) nodeForClass(g, d, "nav_route")
+        if (d != null && common["api"] == "compose" && call.args.arg("typeMap") == null) {
+            unsupportedRouteProperties(index, d).ifEmpty { null }?.let {
+                g.addMeta("nav_route_type_unsupported", linkedMapOf("route" to d.label, "properties" to it, "via" to "${call.name}<${d.label}>()",
+                    "file" to s.path, "line" to call.line))
+            }
+        }
         return nid
     }
 

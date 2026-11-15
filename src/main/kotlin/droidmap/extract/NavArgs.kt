@@ -13,6 +13,11 @@ import org.jetbrains.kotlin.lexer.KtTokens
 import org.jetbrains.kotlin.psi.KtArrayAccessExpression
 import org.jetbrains.kotlin.psi.KtBinaryExpression
 
+/** The names of [t]'s SavedStateHandle constructor parameters and properties. */
+fun savedStateHandles(t: Type): Set<String> =
+    (t.ctors.flatMap { it.params }.filter { it.type?.simple == "SavedStateHandle" }.mapNotNull { it.name } +
+        t.fields.filter { it.type?.simple == "SavedStateHandle" }.mapNotNull { it.name }).toSet()
+
 /** SavedStateHandle calls that read a key, and those that put one there (then it is the ViewModel's own state, not an argument). */
 private val READS = setOf("get", "getLiveData", "getStateFlow", "contains")
 private val WRITES = setOf("set", "remove", "getMutableStateFlow", "setSavedStateProvider")
@@ -28,6 +33,7 @@ class NavArgs(private val code: Code, private val g: Graph) {
     fun run() {
         for (vm in g.byKind("viewmodel")) {
             val t = code.index.types[vm.id.removePrefix("class::")] ?: continue
+            routes(t)
             val uses = g.inEdges(vm.id).filter { it.kind == "uses_viewmodel" }
             if (uses.isEmpty() || uses.any { it.attrs.bool("shared") }) continue
             val hosts = hosts(uses.map { it.source }) ?: continue
@@ -53,10 +59,25 @@ class NavArgs(private val code: Code, private val g: Graph) {
         return out
     }
 
+    /**
+     * `savedStateHandle.toRoute<Profile>()` without a typeMap: unlike a back stack entry's, a SavedStateHandle does not know the
+     * destination's NavTypes, so a route property Navigation has no NavType for fails there.
+     */
+    private fun routes(t: Type) {
+        val handles = savedStateHandles(t)
+        for (c in t.src.calls) {
+            if (c.name != "toRoute" || c.args.isNotEmpty() || !c.isInside(t.psi) || c.receiver?.removePrefix("this.") !in handles) continue
+            val route = (c.typeArgs.firstOrNull() ?: c.assignedTo?.type)?.let { code.index.resolveType(it.name, t.src, c.psi) } ?: continue
+            unsupportedRouteProperties(code.index, route).ifEmpty { null }?.let {
+                g.addMeta("nav_route_type_unsupported", linkedMapOf("route" to route.label, "properties" to it, "via" to "${c.receiver}.toRoute<${route.label}>()",
+                    "file" to t.src.path, "line" to c.line))
+            }
+        }
+    }
+
     /** The constant keys [t] reads from its SavedStateHandle (with the line of the first read), and those it writes. */
     private fun keys(t: Type): Pair<Map<String, Int>, Set<String>> {
-        val handles = (t.ctors.flatMap { it.params }.filter { it.type?.simple == "SavedStateHandle" }.mapNotNull { it.name } +
-            t.fields.filter { it.type?.simple == "SavedStateHandle" }.mapNotNull { it.name }).toSet()
+        val handles = savedStateHandles(t)
         if (handles.isEmpty()) return emptyMap<String, Int>() to emptySet()
         val reads = LinkedHashMap<String, Int>()
         val writes = HashSet<String>()

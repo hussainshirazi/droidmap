@@ -71,8 +71,11 @@ fun parseDiff(diff: String): Pair<List<FileChange>, List<String>> {
  * deleted one): the current files with the changed ones put back as they were. Files the change did not
  * touch are not parsed again. Null when nothing was removed.
  */
-fun baseGraph(built: Built, changes: Changes): Graph? {
-    val p = built.project
+fun baseGraph(built: Built, changes: Changes): Graph? =
+    baseProject(built.project, changes)?.let { buildGraph(it, previous = built.code).graph }
+
+/** [p] as it was at [Changes.from]: the current files with the changed ones put back as they were. Null when nothing droidmap reads was removed. */
+fun baseProject(p: Project, changes: Changes): Project? {
     val root = p.root
     val gone = changes.deleted.filter(p::reads)
     if (changes.files.none { it.removed.isNotEmpty() && it.old?.let(p::reads) == true } && gone.isEmpty()) return null
@@ -83,7 +86,16 @@ fun baseGraph(built: Built, changes: Changes): Graph? {
         f.old?.let { overlay[it] = Git.show(root, changes.from, it) }
     }
     for (d in gone) overlay[d] = Git.show(root, changes.from, d)
-    return buildGraph(Project(root, p.config, overlay), previous = built.code).graph
+    return Project(root, p.config, overlay)
+}
+
+/**
+ * The project's code at [base] (only the files changed since then are parsed again; the rest is [code]), for rules that
+ * compare with what users of the last release have. Null when the change removed nothing, or git cannot tell.
+ */
+fun codeAt(p: Project, base: String, code: Code): Code? {
+    val changes = try { readChanges(p.root, base) } catch (e: UsageError) { return null }
+    return baseProject(p, changes)?.let { Code.read(it, previous = code) }
 }
 
 /** Files whose change can affect every module: the build setup rather than one module's code. */

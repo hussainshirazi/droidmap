@@ -26,7 +26,7 @@ import java.util.stream.Stream;
  *
  * Run as a source file: java Droidmap.java mcp
  * Environment: CLAUDE_PLUGIN_ROOT (the plugin, for its version) and CLAUDE_PLUGIN_DATA (where the jar is kept),
- * both set by Claude Code; DROIDMAP_VERSION overrides the version.
+ * both set by Claude Code; DROIDMAP_VERSION overrides the version, and DROIDMAP_JAR runs that jar instead (a local build).
  */
 public class Droidmap {
     private static final String RELEASES = "https://github.com/hussainshirazi/droidmap/releases/download/";
@@ -40,6 +40,8 @@ public class Droidmap {
         String main;
         try (JarFile jf = new JarFile(jar.toFile())) {
             main = jf.getManifest().getMainAttributes().getValue("Main-Class");
+            // The plugin's hooks run `hook`, which droidmap has from 0.4.0: with an older jar they do nothing, never block Claude.
+            if (args.length > 0 && args[0].equals("hook") && jf.getEntry("droidmap/Hooks.class") == null) return;
         }
         // Not closed: droidmap keeps loading classes from it for as long as it runs.
         URLClassLoader loader = new URLClassLoader(new URL[] {jar.toUri().toURL()}, ClassLoader.getPlatformClassLoader());
@@ -53,6 +55,8 @@ public class Droidmap {
 
     /** The droidmap jar for this plugin version: the cached one, or else downloaded now (or an older cached one when offline). */
     private static Path jar() throws Exception {
+        String local = System.getenv("DROIDMAP_JAR");
+        if (local != null && !local.isBlank()) return Path.of(local); // a local build, to try the plugin with it
         String version = version();
         Path dir = dataDir();
         Path jar = dir.resolve("droidmap-" + version + ".jar");

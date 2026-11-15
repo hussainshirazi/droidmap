@@ -2,8 +2,15 @@ package droidmap.extract
 
 import droidmap.Code
 import droidmap.Graph
+import droidmap.Index
 import droidmap.Source
+import droidmap.Type
 import droidmap.has
+
+private val WORKERS = setOf("Worker", "CoroutineWorker", "ListenableWorker", "RxWorker", "RemoteCoroutineWorker", "RemoteListenableWorker")
+
+/** Whether [t] is a WorkManager worker: it extends one of WorkManager's worker classes, directly or through project classes. */
+fun isWorker(index: Index, t: Type): Boolean = superNames(index, t).any { it in WORKERS }
 
 /**
  * WorkManager: the @HiltWorker classes, whether app code uses HiltWorkerFactory, and the classes that

@@ -11,7 +11,9 @@ import droidmap.Type
 import droidmap.TypeKind
 import droidmap.TypeRef
 import droidmap.classRefs
+import droidmap.bool
 import droidmap.has
+import droidmap.str
 import org.jetbrains.kotlin.com.intellij.psi.PsiElement
 
 private val SCOPES = setOf("Singleton", "ActivityScoped", "ViewModelScoped", "ActivityRetainedScoped", "FragmentScoped",
@@ -80,7 +82,10 @@ class HiltScan(private val code: Code, private val g: Graph) {
             "assisted" to flag(ctor?.anns?.has("AssistedInject") == true),
             "assisted_factory" to flag(t.anns.has("AssistedFactory")),
             "android_entry_point" to flag(entryPoint),
-            "hilt_app" to flag(t.anns.has("HiltAndroidApp"))))
+            "hilt_app" to flag(t.anns.has("HiltAndroidApp")),
+            "hilt_viewmodel" to flag(t.anns.has("HiltViewModel")),
+            // Its constructor needs more than a SavedStateHandle: only Hilt's factory can make it.
+            "needs_factory" to flag(t.anns.has("HiltViewModel") && ctor?.params?.any { it.type?.simple != "SavedStateHandle" } == true)))
         if (t.anns.has("Module")) {
             val comps = t.anns.filter { it.name == "InstallIn" || it.name == "TestInstallIn" }
                 .flatMap { a -> COMPONENT.findAll(a.text ?: "").map { it.groupValues[1] } }
@@ -143,6 +148,8 @@ private val VM_DELEGATES = setOf("viewModels", "activityViewModels", "hiltNavGra
     "hiltViewModel", "activityViewModel", "sharedViewModel")
 private val VM_CALLS = setOf("hiltViewModel", "viewModel", "hiltActivityViewModel", "koinViewModel", "koinActivityViewModel",
     "getViewModel", "koinNavViewModel")
+/** Delegates whose first argument is the navigation graph a ViewModel belongs to. */
+private val GRAPH_VM = setOf("navGraphViewModels", "hiltNavGraphViewModels")
 /** Ways to get a ViewModel that belongs to an activity or a navigation graph, not to the screen's own destination. */
 private val SHARED_VM = setOf("activityViewModels", "hiltNavGraphViewModels", "navGraphViewModels", "activityViewModel", "sharedViewModel",
     "hiltActivityViewModel", "koinActivityViewModel")
@@ -176,7 +183,7 @@ class ViewModelUses(private val code: Code, private val g: Graph) {
                         val vm = vm(call.typeArgs.firstOrNull() ?: assigned?.type, s, call.fn.psi) ?: continue
                         // hiltViewModel(parentEntry), viewModel(viewModelStoreOwner = ...): another owner's ViewModel.
                         val shared = call.name in SHARED_VM || call.args.isNotEmpty()
-                        nodeForFun(g, call.fn, "function")?.let { g.addEdge(it, vm, "uses_viewmodel", s.path, call.line, mapOf("shared" to flag(shared))) }
+                        nodeForFun(g, call.fn, "function")?.let { g.addEdge(it, vm, "uses_viewmodel", s.path, call.line, how(call) + mapOf("shared" to flag(shared))) }
                     }
                     call.name == "get" && call.receiver?.contains("ViewModelProvider") == true -> provider(call)
                 }
@@ -191,7 +198,13 @@ class ViewModelUses(private val code: Code, private val g: Graph) {
     private fun delegate(call: Call, prop: Field, owner: Type) {
         val vm = vm(prop.type, owner.src, owner.psi) ?: vm(call.typeArgs.firstOrNull(), owner.src, owner.psi) ?: return
         val shared = call.name in SHARED_VM || call.args.isNotEmpty() || call.lambda != null
-        g.addEdge(classNode(owner), vm, "uses_viewmodel", owner.src.path, prop.line, mapOf("shared" to flag(shared)))
+        g.addEdge(classNode(owner), vm, "uses_viewmodel", owner.src.path, prop.line, how(call) + mapOf("shared" to flag(shared)))
+    }
+
+    /** How the ViewModel is got: the call ("via"), and whether it is given a factory or another owner (for a graph's, more than the graph). */
+    private fun how(call: Call): Map<String, Any?> {
+        val plain = if (call.name in GRAPH_VM) 1 else 0
+        return mapOf("via" to call.name, "custom_factory" to flag(call.lambda != null || call.args.size > plain))
     }
 
     /** `new ViewModelProvider(this).get(HomeViewModel.class)` (or ::class.java) in a class. */
@@ -201,4 +214,33 @@ class ViewModelUses(private val code: Code, private val g: Graph) {
         val vm = vm(TypeRef(name), call.src, call.psi) ?: return
         g.addEdge(classNode(owner), vm, "uses_viewmodel", call.src.path, call.line)
     }
+}
+
+/**
+ * A @HiltViewModel got without Hilt's factory, which alone can call its @Inject constructor: `viewModel()` in the screen of a
+ * navigation destination (the back stack entry is the owner there, with Navigation's factory), `by viewModels()` in an
+ * activity or fragment that is not @AndroidEntryPoint, or `by navGraphViewModels()`. It crashes when it is created
+ * ("Cannot create an instance of class"). Recorded as meta hilt_viewmodel_factory; runs after ViewModelUses and NavScan.
+ */
+class HiltViewModelFactories(private val code: Code, private val g: Graph) {
+    fun run() {
+        for (e in g.edgesOf("uses_viewmodel")) {
+            val vm = g.nodes[e.target] ?: continue
+            if (!vm.attrs.bool("needs_factory") || e.attrs.bool("custom_factory")) continue
+            val owner = code.index.types[e.source.removePrefix("class::")]
+            val via = e.attrs.str("via")
+            val where = when {
+                via == "viewModel" && owner == null -> destinations(e.source).ifEmpty { null }?.let { "the navigation destination ${it.joinToString(", ")}" }
+                via == "viewModels" && owner != null && lineage(code.index, owner).none { it.anns.has("AndroidEntryPoint") } -> "a class that is not @AndroidEntryPoint"
+                via == "navGraphViewModels" && owner != null -> "a navigation graph's back stack entry"
+                else -> null
+            } ?: continue
+            g.addMeta("hilt_viewmodel_factory", linkedMapOf("viewmodel" to vm.label, "user" to g.label(e.source), "via" to via, "where" to where,
+                "file" to e.file, "line" to e.line))
+        }
+    }
+
+    /** The Compose navigation destinations whose screen is [fn]. */
+    private fun destinations(fn: String): List<String> =
+        g.inEdges(fn).filter { it.kind == "shows" }.mapNotNull { g.nodes[it.source] }.filter { it.attrs.str("api") == "compose" }.map { it.label }.sorted()
 }

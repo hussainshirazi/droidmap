@@ -58,15 +58,16 @@ class ManifestScan(private val p: Project, private val code: Code, private val g
                 if (el.attr(TOOLS_NS, "node") == "remove") continue
                 if (appCode && el.localName.startsWith("activity")) links(el, rel)
                 val fq = qualify(name, pkg)
-                val actions = el.childElements().filter { it.localName == "intent-filter" }
-                    .flatMap { f -> f.childElements().filter { it.localName == "action" }.mapNotNull { it.attr(ANDROID_NS, "name") } }
+                val filters = el.childElements().filter { it.localName == "intent-filter" }
+                val actions = filters.flatMap { f -> f.childElements().filter { it.localName == "action" }.mapNotNull { it.attr(ANDROID_NS, "name") } }
                     .toSortedSet().toList()
                 val decl = code.index.types[fq]
                 g.addNode(classId(fq), "component", fq.substringAfterLast('.'), decl?.src?.path, decl?.line, module,
                     mapOf("component" to el.localName))
                 g.addEdge(mid, classId(fq), "declares", rel, null, mapOf(
-                    "source_set" to ss, "type" to el.localName, "exported" to el.attr(ANDROID_NS, "exported"),
-                    "permission" to el.attr(ANDROID_NS, "permission"), "actions" to actions.ifEmpty { null }))
+                    "source_set" to ss, "type" to el.localName, "name" to name, "exported" to el.attr(ANDROID_NS, "exported"),
+                    "permission" to el.attr(ANDROID_NS, "permission"), "actions" to actions.ifEmpty { null }, "intent_filter" to flag(filters.isNotEmpty()),
+                    "target_activity" to el.attr(ANDROID_NS, "targetActivity")?.let { qualify(it, pkg) }))
             }
         }
         merged()

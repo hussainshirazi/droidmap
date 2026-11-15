@@ -13,7 +13,9 @@ Generic code graphs see classes and calls. They do not see that:
 - version 4 of your Room database has no migration to version 5, so users on 4 crash on update;
 - an entity gained a column but the database version was not bumped, which crashes on update too;
 - your migration test is named `migrationFrom1To4` but runs 1→2→3→4, while users on version 1 get `MIGRATION_1_4`, which no test runs;
+- a change removed `Status.PAUSED`, but Room stored it by name in users' rows, which now crash when read;
 - `navigate("settings")` points at a route no `NavHost` registers;
+- a screen gets its `@HiltViewModel` with `viewModel()` instead of `hiltViewModel()`, and crashes when it opens;
 - a ViewModel injects a repository that nothing binds, in Hilt or in Koin (a crash at runtime with Koin);
 - a library added `ACCESS_NETWORK_STATE` to your merged manifest;
 - a feature module gets `:core:data` through a convention plugin in `build-logic`, which your module rules forbid.
@@ -186,6 +188,10 @@ Findings show up as code scanning alerts, as notes on the changed lines and in t
 
 On Claude Code before 2.1.275, add the marketplace first: `/plugin marketplace add hussainshirazi/droidmap`, then `/plugin install droidmap@droidmap`. The skill is a plain [SKILL.md](plugin/skills/droidmap/SKILL.md); other agents that read skills can use the same file.
 
+The plugin also has two hooks (from droidmap 0.4.0). When a session starts, droidmap notes the project's findings. When Claude is about to finish, it checks again, and if Claude's changes added an error (a migration that is missing or fails, a route nothing registers, a binding nothing provides), it stops Claude from finishing and tells it which, so Claude fixes it first. Findings that were there before the session are left alone, and if Claude stops a second time, the errors are left to you. On Now in Android each check takes about 2 seconds.
+
+Measured with `claude plugin eval` ([the suite](plugin/evals/README.md): three tasks on a small Room, Hilt and Compose app, three runs each, with and without the plugin, 2026-11-15). Adding a column to an entity users already have data in: with the plugin, 3 of 3 runs were fully correct (version bumped, a migration with a default, registered and tested, the shipped schema untouched); without it, 0 of 3 were (two runs left the migration unregistered or untested). Renaming a route argument the ViewModel reads, and adding a screen with a `@HiltViewModel`: correct in every run either way.
+
 **Any MCP client.** `droidmap init` writes `.mcp.json` (Claude Code), and `.cursor/mcp.json` or `.vscode/mcp.json` when those folders exist; commit them and everyone on the team gets the server. It never changes a file that exists: it prints what to add instead. By hand:
 
 ```sh
@@ -197,6 +203,20 @@ claude mcp add droidmap -- droidmap mcp .
 ```
 
 Without installing anything but Java: `"command": "java", "args": ["-jar", "/path/to/droidmap.jar", "mcp", "."]`. With Docker: `"command": "docker", "args": ["run", "--rm", "-i", "-v", "/path/to/project:/project", "ghcr.io/hussainshirazi/droidmap", "mcp"]`. droidmap is also listed in the [MCP Registry](https://registry.modelcontextprotocol.io) as `io.github.hussainshirazi/droidmap` (from version 0.2.0).
+
+**Gemini in Android Studio** connects to MCP servers over HTTP only. Start droidmap's HTTP server in the project (it listens on `127.0.0.1` only, and keeps running until you stop it):
+
+```sh
+droidmap mcp --http 3920
+```
+
+then add it under Settings > Tools > AI > MCP Servers:
+
+```json
+{ "mcpServers": { "droidmap": { "httpUrl": "http://127.0.0.1:3920/mcp" } } }
+```
+
+Google's [Android CLI](https://developer.android.com/blog/posts/android-cli-now-stable-1-accelerate-developing-for-android-using-any-agent) gives agents Android Studio's inspections of one file at a time; droidmap adds what lies across files and modules (Room versions and migrations, routes and their arguments, bindings, the manifest), and needs no IDE running, so the same checks run in CI.
 
 <a href="https://mcprush.com/to/droidmap-mcp?ref=badge"><img width="380" height="200" src="https://mcprush.com/badge/droidmap-mcp/card.svg" alt="droidmap MCP server" /></a>
 
@@ -267,20 +287,30 @@ Exit codes: 0 when done, 1 when `check` finds something at `--fail-on` or above 
 | [`room-migration-unused`](docs/rules/room-migration-unused.md) | warning | a manual `Migration` that app code never uses (not passed to `addMigrations`?), even if a test runs it |
 | [`room-destructive-fallback`](docs/rules/room-destructive-fallback.md) | warning | `fallbackToDestructiveMigration()`, which deletes user data |
 | [`room-insert-replace`](docs/rules/room-insert-replace.md) | off | `@Insert(onConflict = REPLACE)`, which deletes and re-inserts rows |
+| [`room-enum-constant-removed`](docs/rules/room-enum-constant-removed.md) | error | with `--base REF`: an enum constant removed or renamed while Room stores the enum by name: rows users saved with it crash when read ("Can't convert value to enum") |
+| [`room-database-not-singleton`](docs/rules/room-database-not-singleton.md) | warning | a Room database built in a DI provider that is not a singleton: each injection opens another instance, and their Flows miss each other's writes |
+| [`datastore-duplicate-file`](docs/rules/datastore-duplicate-file.md) | error | two DataStores on one file (two delegates with one name, or one built in a provider that is not a singleton): "There are multiple DataStores active for the same file" |
 | [`nav-unknown-target`](docs/rules/nav-unknown-target.md) | error | `navigate()` to a route or key no destination registers |
 | [`nav-unreachable`](docs/rules/nav-unreachable.md) | warning | a destination nothing navigates to, starts at or refers to, and that no deep link or menu item opens |
 | [`nav-argument-missing`](docs/rules/nav-argument-missing.md) | warning | a ViewModel that reads `savedStateHandle["topicId"]` when the destination showing it calls its argument `id`: always null |
+| [`nav-route-type-unsupported`](docs/rules/nav-route-type-unsupported.md) | error | a type-safe route property Navigation has no NavType for (a data class, a `Set`, a date) with no `typeMap`: "could not find any NavType for argument" |
 | [`nav-deeplink-not-in-manifest`](docs/rules/nav-deeplink-not-in-manifest.md) | warning | a deep link (`navDeepLink`, `<deepLink>`) whose scheme and host no activity's intent filter accepts, so the link does not open the app |
 | [`hilt-missing-binding`](docs/rules/hilt-missing-binding.md) | warning | an injected project type with no `@Inject` constructor, `@Provides` or `@Binds` |
 | [`hilt-duplicate-binding`](docs/rules/hilt-duplicate-binding.md) | error | the same type and qualifier bound twice in one source set |
 | [`hilt-app-not-registered`](docs/rules/hilt-app-not-registered.md) | error | `@AndroidEntryPoint` classes, but the manifest's `<application android:name>` is not the `@HiltAndroidApp` class (or there is none): they crash when they open |
 | [`hilt-fragment-host`](docs/rules/hilt-fragment-host.md) | error | an `@AndroidEntryPoint` fragment hosted by an activity that is not one (through its navigation graph, layout or a fragment transaction): it crashes when the fragment is attached |
+| [`hilt-viewmodel-factory`](docs/rules/hilt-viewmodel-factory.md) | error | a `@HiltViewModel` got without Hilt's factory: `viewModel()` in a navigation destination, `by viewModels()` outside an `@AndroidEntryPoint`, `by navGraphViewModels()`. "Cannot create an instance of class" |
 | [`workmanager-setup`](docs/rules/workmanager-setup.md) | warning | a `@HiltWorker` that nothing gives `HiltWorkerFactory` to, or a `Configuration.Provider` that WorkManager never asks because its default initializer is still in the manifest |
+| [`workmanager-worker-renamed`](docs/rules/workmanager-worker-renamed.md) | warning | with `--base REF`: a Worker renamed, moved or deleted while users have its periodic work saved: it fails every time it runs, and `KEEP` keeps it |
+| [`worker-input-missing`](docs/rules/worker-input-missing.md) | warning | a worker that reads an input key none of its work requests put: always null |
 | [`koin-missing-definition`](docs/rules/koin-missing-definition.md) | warning | a type Koin is asked for (`get()`, `inject()`, `koinInject()`) that no Koin definition provides: `NoDefinitionFoundException` at runtime |
 | [`gradle-unknown-project`](docs/rules/gradle-unknown-project.md) | error | a project dependency on a module settings does not include |
 | [`gradle-forbidden-dependency`](docs/rules/gradle-forbidden-dependency.md) | error | a dependency your `[[gradle.forbid]]` rules ban |
 | [`gradle-cycle`](docs/rules/gradle-cycle.md) | error | modules that depend on each other in a cycle |
 | [`manifest-permission`](docs/rules/manifest-permission.md) | error | a permission not in your `allowed_permissions`, in a source manifest or added by a library to the merged one |
+| [`component-not-in-manifest`](docs/rules/component-not-in-manifest.md) | error | an activity, service or receiver the code sends an explicit Intent to, but no manifest declares: `ActivityNotFoundException`, or a service that never runs |
+| [`intent-extra-missing`](docs/rules/intent-extra-missing.md) | warning | a component that reads an Intent extra none of the Intents sent to it put: always null |
+| [`notification-channel-missing`](docs/rules/notification-channel-missing.md) | warning | a notification built for a channel id the app never creates: not shown from Android 8, a crash in `startForeground` |
 | [`gson-model-not-kept`](docs/rules/gson-model-not-kept.md) | warning | a class Gson reads by reflection (`fromJson`, `TypeToken`, a Retrofit API with `GsonConverterFactory`) whose fields R8 renames in a minified release build: no `@SerializedName`, `@Keep` or keep rule. Debug works, release reads empty fields |
 | [`moshi-model-not-kept`](docs/rules/moshi-model-not-kept.md) | warning | the same for Moshi without code generation (`moshi.adapter(X::class.java)`, a Retrofit API with `MoshiConverterFactory`): a class with no `@JsonClass(generateAdapter = true)` whose fields have no `@Json(name)` |
 

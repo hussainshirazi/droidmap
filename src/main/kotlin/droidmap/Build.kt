@@ -2,13 +2,20 @@ package droidmap
 
 import droidmap.extract.FragmentHosts
 import droidmap.extract.GradleScan
-import droidmap.extract.ShrinkScan
 import droidmap.extract.HiltScan
+import droidmap.extract.HiltViewModelFactories
+import droidmap.extract.Inputs
 import droidmap.extract.KoinScan
 import droidmap.extract.ManifestScan
 import droidmap.extract.NavArgs
 import droidmap.extract.NavScan
+import droidmap.extract.NotificationChannels
+import droidmap.extract.RemovedEnumConstants
+import droidmap.extract.RenamedWorkers
 import droidmap.extract.RoomScan
+import droidmap.extract.ShrinkScan
+import droidmap.extract.SingleInstances
+import droidmap.extract.UndeclaredComponents
 import droidmap.extract.ViewModelUses
 import droidmap.extract.WorkScan
 import java.nio.file.Path
@@ -17,8 +24,8 @@ import java.nio.file.Path
 class Built(val graph: Graph, val project: Project, val code: Code)
 
 /**
- * Runs every extractor over a project. With [base] (a git commit), Room schema files are also compared
- * with that commit. Files unchanged since [previous] are not parsed again.
+ * Runs every extractor over a project. With [base] (a git commit), Room schema files, enum constants stored by Room and
+ * periodic workers are also compared with that commit. Files unchanged since [previous] are not parsed again.
  */
 fun buildGraph(p: Project, base: String? = null, previous: Code? = null): Built {
     val g = Graph()
@@ -34,7 +41,16 @@ fun buildGraph(p: Project, base: String? = null, previous: Code? = null): Built 
     ShrinkScan(p, code, g).run()
     ViewModelUses(code, g).run() // after the DI scans, which mark the ViewModels
     NavArgs(code, g).run() // after the ViewModel uses and the destinations' arguments
+    HiltViewModelFactories(code, g).run()
+    SingleInstances(code, g).run()
+    NotificationChannels(code, g).run()
     ManifestScan(p, code, g).run()
+    UndeclaredComponents(p, code, g).run() // after the manifests
+    Inputs(code, g).run()
+    if (base != null) codeAt(p, base, code)?.let { then ->
+        RemovedEnumConstants(code, then, g).run()
+        RenamedWorkers(code, then, g).run()
+    }
     g.meta["tool"] = "droidmap"
     g.meta["version"] = VERSION
     g.meta["files"] = linkedMapOf(

@@ -1,13 +1,14 @@
 package droidmap.extract
 
 import droidmap.Code
+import droidmap.Field
 import droidmap.Type
 import droidmap.arg
 import droidmap.find
 import droidmap.has
 
-/** A table column as Room derives it from an entity field. [affinity] is null when a type converter may decide it. */
-class Column(val name: String, val affinity: String?, val notNull: Boolean)
+/** A table column as Room derives it from an entity field ([field], when read from source). [affinity] is null when a type converter may decide it. */
+class Column(val name: String, val affinity: String?, val notNull: Boolean, val field: Field? = null)
 
 /** Types whose SQLite affinity Room fixes without a type converter (Java types are read with these Kotlin names). */
 private val AFFINITY = mapOf(
@@ -49,7 +50,7 @@ class RoomColumns(private val code: Code) {
                     val named = nameArg?.let { code.eval.eval(it.expr) as? String ?: return false } // a name we cannot read (BaseColumns._ID)
                     val name = named?.takeIf { it != "[field-name]" } ?: f.name ?: return false
                     val plain = '.' !in type.name || type.name.startsWith("kotlin.")
-                    out.add(Column(prefix + name, AFFINITY[type.simple]?.takeIf { plain && type.args.isEmpty() }, fieldNonNull))
+                    out.add(Column(prefix + name, AFFINITY[type.simple]?.takeIf { plain && type.args.isEmpty() }, fieldNonNull, f))
                 }
             }
             return true
