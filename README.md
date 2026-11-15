@@ -4,6 +4,7 @@
 [![Release](https://img.shields.io/github/v/release/hussainshirazi/droidmap)](https://github.com/hussainshirazi/droidmap/releases/latest)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 [![MCP Registry](https://img.shields.io/badge/MCP_Registry-io.github.hussainshirazi%2Fdroidmap-6e56cf)](https://registry.modelcontextprotocol.io/v0/servers?search=io.github.hussainshirazi/droidmap)
+[![M8ven Score](https://m8ven.ai/badge/mcp/hussainshirazi/droidmap)](https://m8ven.ai/mcp/hussainshirazi/droidmap?s=readme)
 
 **An Android-aware map of your project, for you, your pull requests and your AI coding agent.**
 
@@ -196,6 +197,8 @@ claude mcp add droidmap -- droidmap mcp .
 ```
 
 Without installing anything but Java: `"command": "java", "args": ["-jar", "/path/to/droidmap.jar", "mcp", "."]`. With Docker: `"command": "docker", "args": ["run", "--rm", "-i", "-v", "/path/to/project:/project", "ghcr.io/hussainshirazi/droidmap", "mcp"]`. droidmap is also listed in the [MCP Registry](https://registry.modelcontextprotocol.io) as `io.github.hussainshirazi/droidmap` (from version 0.2.0).
+
+<a href="https://mcprush.com/to/droidmap-mcp?ref=badge"><img width="380" height="200" src="https://mcprush.com/badge/droidmap-mcp/card.svg" alt="droidmap MCP server" /></a>
 
 | Tool | Use it to |
 |---|---|
