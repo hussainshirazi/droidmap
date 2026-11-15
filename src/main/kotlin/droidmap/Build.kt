@@ -6,6 +6,7 @@ import droidmap.extract.ShrinkScan
 import droidmap.extract.HiltScan
 import droidmap.extract.KoinScan
 import droidmap.extract.ManifestScan
+import droidmap.extract.NavArgs
 import droidmap.extract.NavScan
 import droidmap.extract.RoomScan
 import droidmap.extract.ViewModelUses
@@ -32,6 +33,7 @@ fun buildGraph(p: Project, base: String? = null, previous: Code? = null): Built 
     FragmentHosts(p, code, g).run()
     ShrinkScan(p, code, g).run()
     ViewModelUses(code, g).run() // after the DI scans, which mark the ViewModels
+    NavArgs(code, g).run() // after the ViewModel uses and the destinations' arguments
     ManifestScan(p, code, g).run()
     g.meta["tool"] = "droidmap"
     g.meta["version"] = VERSION

@@ -143,6 +143,9 @@ private val VM_DELEGATES = setOf("viewModels", "activityViewModels", "hiltNavGra
     "hiltViewModel", "activityViewModel", "sharedViewModel")
 private val VM_CALLS = setOf("hiltViewModel", "viewModel", "hiltActivityViewModel", "koinViewModel", "koinActivityViewModel",
     "getViewModel", "koinNavViewModel")
+/** Ways to get a ViewModel that belongs to an activity or a navigation graph, not to the screen's own destination. */
+private val SHARED_VM = setOf("activityViewModels", "hiltNavGraphViewModels", "navGraphViewModels", "activityViewModel", "sharedViewModel",
+    "hiltActivityViewModel", "koinActivityViewModel")
 
 /**
  * Who uses each ViewModel (whatever DI made it one): composables that get it with hiltViewModel() or
@@ -171,7 +174,9 @@ class ViewModelUses(private val code: Code, private val g: Graph) {
                     call.name in VM_DELEGATES && assigned?.delegate != null && assigned.owner != null -> delegate(call, assigned, assigned.owner)
                     call.name in VM_CALLS && call.fn != null -> {
                         val vm = vm(call.typeArgs.firstOrNull() ?: assigned?.type, s, call.fn.psi) ?: continue
-                        nodeForFun(g, call.fn, "function")?.let { g.addEdge(it, vm, "uses_viewmodel", s.path, call.line) }
+                        // hiltViewModel(parentEntry), viewModel(viewModelStoreOwner = ...): another owner's ViewModel.
+                        val shared = call.name in SHARED_VM || call.args.isNotEmpty()
+                        nodeForFun(g, call.fn, "function")?.let { g.addEdge(it, vm, "uses_viewmodel", s.path, call.line, mapOf("shared" to flag(shared))) }
                     }
                     call.name == "get" && call.receiver?.contains("ViewModelProvider") == true -> provider(call)
                 }
@@ -185,7 +190,8 @@ class ViewModelUses(private val code: Code, private val g: Graph) {
     /** `private val vm: HomeViewModel by viewModels()` or `by viewModels<HomeViewModel>()` in a class. */
     private fun delegate(call: Call, prop: Field, owner: Type) {
         val vm = vm(prop.type, owner.src, owner.psi) ?: vm(call.typeArgs.firstOrNull(), owner.src, owner.psi) ?: return
-        g.addEdge(classNode(owner), vm, "uses_viewmodel", owner.src.path, prop.line)
+        val shared = call.name in SHARED_VM || call.args.isNotEmpty() || call.lambda != null
+        g.addEdge(classNode(owner), vm, "uses_viewmodel", owner.src.path, prop.line, mapOf("shared" to flag(shared)))
     }
 
     /** `new ViewModelProvider(this).get(HomeViewModel.class)` (or ::class.java) in a class. */

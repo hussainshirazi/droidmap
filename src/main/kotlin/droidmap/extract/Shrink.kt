@@ -7,8 +7,10 @@ import droidmap.Source
 import droidmap.Type
 import droidmap.TypeKind
 import droidmap.TypeRef
+import droidmap.arg
 import droidmap.bool
 import droidmap.classRefs
+import droidmap.find
 import droidmap.has
 
 /** `isMinifyEnabled = true` (Kotlin DSL) or `minifyEnabled true` (Groovy). */
@@ -20,39 +22,57 @@ private val HTTP = setOf("GET", "POST", "PUT", "DELETE", "PATCH", "HTTP")
 private val KEEP = Regex("""-keep(?:classmembers|classeswithmembers)?\s+(?:[^{\n]*?\s)?(?:class|interface|enum)\s+([\w.*?$]+)(?:\s+(?:extends|implements)\s+([\w.*?$]+))?[^{\n]*\{([^}]*)}""")
 
 /**
- * Release shrinking against Gson: Gson reads and writes a class's fields by name through reflection, and R8
- * (a release build with minifyEnabled) renames fields. Finds the classes Gson reflects on (`fromJson(..., X::class.java)`,
- * `TypeToken<List<X>>`, and the types of a Retrofit API when the project uses GsonConverterFactory), and the
- * project classes their fields hold, and records, as meta `gson_unkept_models`, those with fields that have no
- * @SerializedName, no @Keep and no keep rule that keeps their members.
+ * A JSON library that reads and writes a class's fields by name through reflection: the package it is imported from,
+ * the calls that name the class to read, its Retrofit converter, the annotation that gives a field its JSON name, and
+ * the meta key its findings go to.
+ */
+private class JsonLib(val name: String, val pkg: String, val calls: Set<String>, val typeToken: Boolean, val converter: String,
+                      val nameAnn: String, val meta: String)
+
+private val GSON = JsonLib("Gson", "com.google.gson", setOf("fromJson", "getAdapter"), true, "GsonConverterFactory", "SerializedName", "gson_unkept_models")
+private val MOSHI = JsonLib("Moshi", "com.squareup.moshi", setOf("adapter"), false, "MoshiConverterFactory", "Json", "moshi_unkept_models")
+
+/**
+ * Release shrinking against reflection-based JSON (Gson, and Moshi without code generation): they read and write a
+ * class's fields by name, and R8 (a release build with minifyEnabled) renames fields. Finds the classes the library
+ * reflects on (`fromJson(..., X::class.java)`, `TypeToken<List<X>>`, `moshi.adapter(X::class.java)`, and the types of a
+ * Retrofit API when the project uses the library's converter), and the project classes their fields hold, and records,
+ * as meta `gson_unkept_models` or `moshi_unkept_models`, those with fields that have no JSON name annotation
+ * (@SerializedName, @Json), no @Keep and no keep rule that keeps their members. A Moshi class with
+ * @JsonClass(generateAdapter = true) has a generated adapter instead, which R8 keeps.
  */
 class ShrinkScan(private val p: Project, private val code: Code, private val g: Graph) {
     private val index = code.index
+    private val targets by lazy { targets().filter { !it.dontObfuscate } }
 
     fun run() {
-        val gson = code.sources.filter { !it.isTest && it.importsFrom("com.google.gson") }
-        if (gson.isEmpty()) return
-        val targets = targets().filter { !it.dontObfuscate }
+        for (lib in listOf(GSON, MOSHI)) scan(lib)
+    }
+
+    private fun scan(lib: JsonLib) {
+        val users = code.sources.filter { !it.isTest && it.importsFrom(lib.pkg) }
+        if (users.isEmpty()) return
+        val targets = targets
         if (targets.isEmpty()) return
 
-        val roots = LinkedHashMap<Type, String>() // model -> where Gson reflects on it
-        for (s in gson) {
-            for (c in s.calls) if (c.name == "fromJson" || c.name == "getAdapter") {
+        val roots = LinkedHashMap<Type, String>() // model -> where the library reflects on it
+        for (s in users) {
+            for (c in s.calls) if (c.name in lib.calls) {
                 val names = c.args.flatMap { a -> classRefs(a.psi).map { it.first } } + c.typeArgs.flatMap { leaves(it) }
                 for (n in names) model(n, s, c.psi)?.let { roots.putIfAbsent(it, "${c.name} in ${s.path.substringAfterLast('/')}") }
             }
-            for (m in TYPE_TOKEN.findAll(s.text)) for (n in NAME.findAll(m.groupValues[1])) {
+            if (lib.typeToken) for (m in TYPE_TOKEN.findAll(s.text)) for (n in NAME.findAll(m.groupValues[1])) {
                 model(n.value, s, null)?.let { roots.putIfAbsent(it, "TypeToken in ${s.path.substringAfterLast('/')}") }
             }
         }
-        if (code.sources.any { !it.isTest && "GsonConverterFactory" in it.text }) {
+        if (code.sources.any { !it.isTest && lib.converter in it.text }) {
             for (s in code.sources) for (t in s.types) for (f in t.fns) {
                 if (t.kind != TypeKind.INTERFACE || f.anns.none { it.name in HTTP }) continue
                 val names = (listOfNotNull(f.returns) + f.params.filter { it.anns.has("Body") }.mapNotNull { it.type }).flatMap { leaves(it) }
-                for (n in names) model(n, s, f.psi)?.let { roots.putIfAbsent(it, "the Retrofit API ${t.label} (GsonConverterFactory)") }
+                for (n in names) model(n, s, f.psi)?.let { roots.putIfAbsent(it, "the Retrofit API ${t.label} (${lib.converter})") }
             }
         }
-        // Gson also reflects on the classes held by a model's fields.
+        // The library also reads the classes held by a model's fields.
         val models = LinkedHashMap(roots)
         val todo = ArrayDeque(roots.keys)
         while (todo.isNotEmpty()) {
@@ -64,10 +84,11 @@ class ShrinkScan(private val p: Project, private val code: Code, private val g: 
         }
         for ((m, where) in models) {
             if (lineage(index, m).any { it.anns.has("Keep") }) continue
-            val bare = stored(m).filter { f -> f.anns.none { it.name == "SerializedName" } }.mapNotNull { it.name }
+            if (lib === MOSHI && generated(m)) continue
+            val bare = stored(m).filter { f -> f.anns.none { it.name == lib.nameAnn } }.mapNotNull { it.name }
             if (bare.isEmpty()) continue
             val t = targets.firstOrNull { t -> t.contains(m.src.path) && t.keeps.none { it.covers(m) } } ?: continue
-            g.addMeta("gson_unkept_models", mapOf("class" to m.fq, "label" to m.label, "used_in" to where, "fields" to bare,
+            g.addMeta(lib.meta, mapOf("class" to m.fq, "label" to m.label, "used_in" to where, "fields" to bare,
                 "minify" to t.buildFile, "file" to m.src.path, "line" to m.line))
         }
     }
@@ -127,6 +148,10 @@ class ShrinkScan(private val p: Project, private val code: Code, private val g: 
             }
         }
     }
+
+    /** @JsonClass(generateAdapter = true): Moshi's generated adapter reads the class, not reflection. */
+    private fun generated(t: Type): Boolean =
+        t.anns.find("JsonClass")?.let { a -> code.eval.eval((a.args.arg("generateAdapter", 0))?.expr) == true } == true
 
     /** A project class (not an enum, interface or object) that [name] refers to in [s]. */
     private fun model(name: String, s: Source, at: org.jetbrains.kotlin.com.intellij.psi.PsiElement?): Type? =

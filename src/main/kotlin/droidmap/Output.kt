@@ -37,7 +37,8 @@ fun toSarif(findings: List<Finding>, prefix: String = ""): Map<String, Any?> {
             "defaultConfiguration" to mapOf("level" to (level[r.severity] ?: "none"))).filterValues { it != null }
     }
     val results = findings.map { f ->
-        val r = linkedMapOf<String, Any?>("ruleId" to f.rule, "level" to (level[f.severity] ?: "note"), "message" to mapOf("text" to f.message))
+        val r = linkedMapOf<String, Any?>("ruleId" to f.rule, "level" to (level[f.severity] ?: "note"), "message" to mapOf("text" to f.message),
+            "partialFingerprints" to mapOf("droidmap/v1" to fingerprint(f)))
         if (f.file != null) {
             val phys = linkedMapOf<String, Any?>("artifactLocation" to mapOf("uri" to prefix + f.file))
             if (f.line != null) phys["region"] = mapOf("startLine" to f.line)

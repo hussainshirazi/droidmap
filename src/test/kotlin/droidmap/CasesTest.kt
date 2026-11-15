@@ -1164,4 +1164,221 @@ allowed_permissions = ["android.permission.INTERNET"]""",
         assertEquals(listOf("koin-missing-definition Analytics", "koin-missing-definition Missing"),
             f.map { "${it.rule} ${it.node?.substringAfterLast('.')}" }.sorted())
     }
+
+    /** Runs the CLI: (exit code, what it printed). */
+    private fun cli(vararg args: String): Pair<Int, String> {
+        val out = ByteArrayOutputStream()
+        val code = runMain(args.toList(), PrintStream(out), PrintStream(ByteArrayOutputStream()))
+        return code to out.toString().replace("\r\n", "\n")
+    }
+
+    @Test
+    fun baselineReportsOnlyNewFindings() {
+        fun project(vararg targets: String, padding: Int = 0) = write(*app, "app/src/main/kotlin/com/x/Nav.kt" to
+            "package com.x\nimport androidx.navigation.compose.NavHost\nimport androidx.navigation.compose.composable\n" + "\n".repeat(padding) +
+            "fun AppNav(navController: NavHostController) {\n    NavHost(navController, \"home\") { composable(\"home\") { } }\n}\n" +
+            targets.joinToString("") { "fun go_$it(navController: NavHostController) { navController.navigate(\"$it\") }\n" })
+        val root = project("ghost").toString()
+        assertEquals(1, cli("check", root).first)
+        assertEquals(0, cli("check", root, "--update-baseline").first)
+        assertTrue(Files.isRegularFile(tmp.resolve(BASELINE_NAME)))
+        val (code, text) = cli("check", root)
+        assertEquals(0, code, text)
+        assertTrue("No findings." in text && "1 known finding in droidmap-baseline.json is not shown" in text, text)
+        // The known finding moved down two lines and a new one came: only the new one is reported.
+        project("ghost", "phantom", padding = 2)
+        val (code2, text2) = cli("check", root)
+        assertEquals(1, code2)
+        assertTrue("phantom" in text2 && "ghost" !in text2, text2)
+        // Once it is fixed, the baseline entry is reported as one to drop.
+        project("phantom")
+        assertTrue("1 finding in it is fixed" in cli("check", root).second)
+        // --no-baseline shows everything, and SARIF gives each result a fingerprint that does not depend on its line.
+        assertTrue("phantom" in cli("check", root, "--no-baseline").second)
+        val fingerprint = Regex(""""droidmap/v1": "(\w+)"""")
+        val fp = fingerprint.find(cli("check", root, "--format", "sarif", "--no-baseline").second)?.groupValues?.get(1)
+        project("phantom", padding = 5)
+        assertEquals(fp, fingerprint.find(cli("check", root, "--format", "sarif", "--no-baseline").second)?.groupValues?.get(1))
+        // A rule that can report several findings on one node tells them apart by key.
+        val f1 = Finding("r", "error", "m", "a.kt", 1, "n", key = "x")
+        assertTrue(identity(f1) != identity(f1.copy(key = "y")) && identity(f1) == identity(f1.copy(line = 9, message = "other")))
+    }
+
+    @Test
+    fun migrationSqlReplayedOnTheSchemaFiles() {
+        val t = "\${TABLE_NAME}"
+        fun schema(v: Int, vararg tables: Pair<String, String>, indices: List<Pair<String, String>> = emptyList()): String {
+            val entities = tables.joinToString(",") { (name, cols) ->
+                val idx = indices.filter { it.first == name }
+                    .joinToString(",") { """{"name":"x","unique":false,"columnNames":[],"orders":[],"createSql":"${it.second.replace("TBL", t)}"}""" }
+                """{"tableName":"$name","createSql":"CREATE TABLE IF NOT EXISTS `$t` ($cols)","fields":[],"indices":[$idx],"foreignKeys":[]}"""
+            }
+            return """{"formatVersion":1,"database":{"version":$v,"identityHash":"h$v","entities":[$entities],"views":[]}}"""
+        }
+        val user1 = "user" to "`id` INTEGER NOT NULL, `name` TEXT, PRIMARY KEY(`id`)"
+        val user2 = "user" to "`id` INTEGER NOT NULL, `name` TEXT, `age` INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(`id`)"
+        val user4 = "user" to "`id` INTEGER NOT NULL, `name` TEXT, `age` INTEGER NOT NULL DEFAULT 0, `email` TEXT NOT NULL DEFAULT '', PRIMARY KEY(`id`)"
+        val user5 = "user" to "`id` INTEGER NOT NULL, `fullName` TEXT, `age` INTEGER NOT NULL DEFAULT 0, `email` TEXT NOT NULL DEFAULT '', PRIMARY KEY(`id`)"
+        val note = "note" to "`id` INTEGER NOT NULL, `userId` INTEGER NOT NULL, `text` TEXT NOT NULL, PRIMARY KEY(`id`), " +
+            "FOREIGN KEY(`userId`) REFERENCES `user`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE"
+        val byName = "user" to "CREATE INDEX IF NOT EXISTS `index_user_name` ON `TBL` (`name`)"
+        val byFullName = "user" to "CREATE INDEX IF NOT EXISTS `index_user_fullName` ON `TBL` (`fullName`)"
+        val dir = "app/schemas/com.x.AppDb"
+        val (g, f) = build(
+            "settings.gradle.kts" to """include(":app")""",
+            "app/build.gradle.kts" to """
+                plugins { id("com.android.application") }
+                android { defaultConfig { minSdk = 26 } }""",
+            "$dir/1.json" to schema(1, user1),
+            "$dir/2.json" to schema(2, user2, indices = listOf(byName)),
+            "$dir/3.json" to schema(3, user2, note, indices = listOf(byName)),
+            "$dir/4.json" to schema(4, user4, note, indices = listOf(byName)),
+            "$dir/5.json" to schema(5, user5, note, indices = listOf(byFullName)),
+            "app/src/main/kotlin/com/x/Db.kt" to """
+                package com.x
+                import androidx.room.Database
+                import androidx.room.RoomDatabase
+                import androidx.room.migration.Migration
+                import androidx.sqlite.db.SupportSQLiteDatabase
+
+                @Database(entities = [], version = 5)
+                abstract class AppDb : RoomDatabase()
+
+                val MIGRATION_1_2 = object : Migration(1, 2) {
+                    override fun migrate(db: SupportSQLiteDatabase) {
+                        db.execSQL("ALTER TABLE user ADD COLUMN age INTEGER NOT NULL DEFAULT 0")
+                        db.execSQL(""${'"'}
+                            CREATE INDEX IF NOT EXISTS index_user_name
+                            ON user (name)
+                        ""${'"'}.trimIndent())
+                    }
+                }
+                val MIGRATION_2_3 = Migration(2, 3) { db ->
+                    db.execSQL("CREATE TABLE note (id INTEGER NOT NULL PRIMARY KEY, userId INTEGER NOT NULL, text TEXT NOT NULL); CREATE INDEX x ON note (userId)")
+                }
+                object Migration3To4 : Migration(3, 4) {
+                    override fun migrate(db: SupportSQLiteDatabase) {
+                        db.execSQL("ALTER TABLE user ADD COLUMN email TEXT NOT NULL")
+                    }
+                }
+                val MIGRATION_4_5 = Migration(4, 5) {
+                    it.execSQL("ALTER TABLE user RENAME COLUMN name TO fullName")
+                }
+                val MIGRATION_1_3 = Migration(1, 3) { db ->
+                    if (BuildConfig.DEBUG) db.execSQL("DROP TABLE user")
+                }
+                fun setUp(b: RoomDatabase.Builder<AppDb>) = b.addMigrations(MIGRATION_1_2, MIGRATION_2_3, Migration3To4, MIGRATION_4_5, MIGRATION_1_3)
+                """)
+        val sql = f.filter { it.rule == "room-migration-sql" }.associate { it.node!!.substringAfter("AppDb:") to it.message }
+        assertEquals(setOf("2->3:MIGRATION_2_3", "3->4:Migration3To4", "4->5:MIGRATION_4_5"), sql.keys, sql.toString())
+        val m23 = sql.getValue("2->3:MIGRATION_2_3")
+        assertTrue("note lacks the foreign key (userid) REFERENCES user(id) ON DELETE CASCADE" in m23, m23)
+        assertTrue("Android runs only the first, so `CREATE INDEX x ON note (userId)` never runs" in m23, m23)
+        val m34 = sql.getValue("3->4:Migration3To4")
+        assertTrue("which SQLite refuses (\"Cannot add a NOT NULL column with default value NULL\")" in m34 && "users on version 3 crash" in m34, m34)
+        val m45 = sql.getValue("4->5:MIGRATION_4_5")
+        assertTrue("RENAME COLUMN, which needs SQLite 3.25 (Android 11, API 30), but minSdk is 26 (app/build.gradle.kts)" in m45, m45)
+        assertTrue("does not produce" !in m45, m45) // the index on the renamed column follows it, as in SQLite
+        // A statement that runs only sometimes is not followed: no finding, and the reason is kept.
+        assertTrue(g.unresolved.any { it.kind == "room_migration_sql" && "runs only in some cases" in it.reason }, g.unresolved.toString())
+        assertEquals(true, g.nodes.values.single { it.label == "MIGRATION_1_2 1->2" }.attrs["sql_checked"])
+    }
+
+    @Test
+    fun navigationArgumentsAViewModelReads() {
+        val (g, f) = build(*app, "app/src/main/kotlin/com/x/Screens.kt" to """
+            package com.x
+            import androidx.compose.runtime.Composable
+            import androidx.hilt.navigation.compose.hiltViewModel
+            import androidx.lifecycle.SavedStateHandle
+            import androidx.lifecycle.ViewModel
+            import androidx.navigation.NavBackStackEntry
+            import androidx.navigation.NavHostController
+            import androidx.navigation.compose.NavHost
+            import androidx.navigation.compose.composable
+            import androidx.navigation.navArgument
+            import dagger.hilt.android.lifecycle.HiltViewModel
+            import javax.inject.Inject
+            import kotlinx.serialization.Serializable
+
+            const val ITEM_ID = "itemId"
+
+            @Serializable data class Profile(val userId: String)
+
+            @HiltViewModel
+            class TopicViewModel @Inject constructor(savedStateHandle: SavedStateHandle) : ViewModel() {
+                val id: String = checkNotNull(savedStateHandle["topicId"])
+            }
+            @HiltViewModel
+            class SearchViewModel @Inject constructor(private val savedStateHandle: SavedStateHandle) : ViewModel() {
+                val query = savedStateHandle.getStateFlow("query", "")
+                fun onQuery(q: String) { savedStateHandle["query"] = q }
+            }
+            @HiltViewModel
+            class ItemViewModel @Inject constructor(handle: SavedStateHandle) : ViewModel() {
+                val id = handle.get<String>(ITEM_ID)
+                val tab = handle.get<Int>("tab")
+            }
+            @HiltViewModel
+            class ProfileViewModel @Inject constructor(private val handle: SavedStateHandle) : ViewModel() {
+                val id = handle.get<String>("id")
+            }
+            @HiltViewModel
+            class FlowViewModel @Inject constructor(handle: SavedStateHandle) : ViewModel() {
+                val step = handle.get<String>("step")
+            }
+
+            @Composable fun TopicScreen(viewModel: TopicViewModel = hiltViewModel()) {}
+            @Composable fun SearchScreen(viewModel: SearchViewModel = hiltViewModel()) {}
+            @Composable fun ItemScreen(viewModel: ItemViewModel = hiltViewModel()) {}
+            @Composable fun ProfileScreen(viewModel: ProfileViewModel = hiltViewModel()) {}
+            @Composable fun FlowScreen(entry: NavBackStackEntry) { val vm: FlowViewModel = hiltViewModel(entry) }
+
+            fun AppNav(navController: NavHostController) {
+                NavHost(navController, "search") {
+                    composable("topic/{id}") { TopicScreen() }
+                    composable("search") { SearchScreen() }
+                    composable("item?itemId={itemId}", arguments = listOf(navArgument("tab") { })) { ItemScreen() }
+                    composable<Profile> { ProfileScreen() }
+                    composable("flow") { FlowScreen(it) }
+                }
+            }
+            """)
+        val found = f.filter { it.rule == "nav-argument-missing" }
+        assertEquals(listOf("ProfileViewModel id", "TopicViewModel topicId"), found.map { "${it.node!!.substringAfterLast('.')} ${it.key}" }.sorted(), found.toString())
+        val topic = found.single { it.key == "topicId" }.message
+        assertTrue("the destination that shows it, topic/{id}, has no argument named topicId (it has the arguments id)" in topic, topic)
+        assertEquals(listOf("itemId", "tab"), g.nodes.getValue("nav.dest::item?itemId={itemId}").attrs["arguments"])
+        assertEquals(listOf("userId"), g.nodes.getValue("nav.dest::com.x.Profile").attrs["arguments"])
+    }
+
+    @Test
+    fun moshiModelsInAShrunkReleaseBuild() {
+        val (_, f) = build(
+            "settings.gradle.kts" to """include(":app")""",
+            "app/build.gradle.kts" to """
+                plugins { id("com.android.application") }
+                android { buildTypes { release { isMinifyEnabled = true } } }""",
+            "app/src/main/kotlin/com/x/Api.kt" to """
+                package com.x
+                import com.squareup.moshi.Json
+                import com.squareup.moshi.JsonClass
+                import com.squareup.moshi.Moshi
+                import retrofit2.converter.moshi.MoshiConverterFactory
+                import retrofit2.http.GET
+
+                interface Api { @GET("/feed") suspend fun feed(): Feed }
+                @JsonClass(generateAdapter = true) class Feed(val items: List<Item>, val next: Page?)
+                class Item(val title: String, @Json(name = "url") val url: String)
+                class Page(@Json(name = "n") val n: Int)
+                class Settings(val theme: String)
+                fun read(moshi: Moshi, json: String) = moshi.adapter(Settings::class.java).fromJson(json)
+                """)
+        val found = f.filter { it.rule == "moshi-model-not-kept" }
+        // Feed has a generated adapter; the classes it holds are still read by reflection unless they have one too.
+        assertEquals(listOf("Item", "Settings"), found.map { it.node!!.substringAfterLast('.') }.sorted(), found.toString())
+        val item = found.single { it.node!!.endsWith("Item") }.message
+        assertTrue("its fields title have no @Json(name = ...)" in item && "a field of Feed" in item, item)
+        assertEquals(emptyList(), f.filter { it.rule == "gson-model-not-kept" })
+    }
 }

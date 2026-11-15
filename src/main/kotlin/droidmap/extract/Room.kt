@@ -1,6 +1,7 @@
 package droidmap.extract
 
 import droidmap.Arg
+import droidmap.Call
 import droidmap.Code
 import droidmap.Decl
 import droidmap.Field
@@ -10,6 +11,7 @@ import droidmap.Graph
 import droidmap.Project
 import droidmap.Source
 import droidmap.Type
+import droidmap.WILD
 import droidmap.arg
 import droidmap.classRefs
 import droidmap.compactJson
@@ -27,6 +29,16 @@ import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonPrimitive
 import org.jetbrains.kotlin.com.intellij.psi.PsiElement
+import org.jetbrains.kotlin.com.intellij.psi.PsiNewExpression
+import org.jetbrains.kotlin.com.intellij.psi.PsiTryStatement
+import org.jetbrains.kotlin.com.intellij.psi.util.PsiTreeUtil
+import org.jetbrains.kotlin.psi.KtCallExpression
+import org.jetbrains.kotlin.psi.KtLambdaExpression
+import org.jetbrains.kotlin.psi.KtNameReferenceExpression
+import org.jetbrains.kotlin.psi.KtNamedFunction
+import org.jetbrains.kotlin.psi.KtObjectDeclaration
+import org.jetbrains.kotlin.psi.KtSuperTypeCallEntry
+import org.jetbrains.kotlin.psi.KtTryExpression
 
 private val SQL_TABLE = Regex("""\b(?:FROM|JOIN|INTO|UPDATE|TABLE)\s+[`"\[]?(\w+)""", RegexOption.IGNORE_CASE)
 private val WRITE_ANNS = listOf("Insert", "Update", "Delete", "Upsert")
@@ -34,6 +46,17 @@ private val FALLBACKS = setOf("fallbackToDestructiveMigration", "fallbackToDestr
 private val COLLECTIONS = setOf("List", "Collection", "Set", "Iterable", "Array")
 private val REPLACE = Regex("\\bREPLACE\\b")
 private val HELPER_CALLS = setOf("createDatabase", "runMigrationsAndValidate")
+/** Database calls in a migration that change no table. */
+private val SAFE_DB_CALLS = setOf("execSQL", "query", "insert", "update", "delete", "beginTransaction", "beginTransactionNonExclusive",
+    "endTransaction", "setTransactionSuccessful", "inTransaction", "rawQuery", "isOpen", "getVersion")
+/** Functions that run their lambda once, right away. */
+private val SCOPE_FNS = setOf("with", "apply", "run", "also", "let", "use")
+/** SQL that changes rows, not tables. */
+private val DML = Regex("""^\s*(?:INSERT|UPDATE|DELETE|REPLACE|SELECT|WITH)\b""", RegexOption.IGNORE_CASE)
+/** Statements that mean "may not run, or not once": the execSQL inside is not followed. */
+private val BRANCHING = Regex("(If|When|For|While|Foreach|Switch|Conditional|Lambda)(Expression|Statement)")
+/** A SQLite the app brings itself (not the phone's), so the phone's SQLite version does not matter. */
+private val OWN_SQLITE = listOf("BundledSQLiteDriver", "RequerySQLiteOpenHelperFactory", "SupportOpenHelperFactory", "net.sqlcipher", "net.zetetic")
 
 fun migrationId(db: String?, from: Int, to: Int, name: String) = "room.migration::${db ?: "?"}:$from->$to:$name"
 fun schemaId(db: String, version: Int) = "room.schema::$db@$version"
@@ -52,6 +75,11 @@ class RoomScan(private val p: Project, private val code: Code, private val g: Gr
     private val partialEntityLists = HashSet<String>()
     /** (database, version) -> table -> column -> what its schema JSON says. */
     private val schemaTables = HashMap<Pair<String, Int>, Map<String, Map<String, Column>>>()
+    /** (database, version) -> the "database" object of its schema JSON. */
+    private val schemaJson = HashMap<Pair<String, Int>, JsonObject>()
+    /** Where each manual migration runs its SQL: its migrate function or lambda, and the name of the database parameter. */
+    private class Body(val mid: String, val s: Source, val scope: PsiElement?, val param: String?)
+    private val bodies = ArrayList<Body>()
 
     fun run() {
         val files = code.sources.filter { it.importsFrom("androidx.room") }
@@ -73,6 +101,7 @@ class RoomScan(private val p: Project, private val code: Code, private val g: Gr
         schemas()
         drift()
         tests()
+        migrationSql()
     }
 
     // ----- entities, databases, DAOs -----
@@ -177,9 +206,16 @@ class RoomScan(private val p: Project, private val code: Code, private val g: Gr
     }
 
     // ----- migrations -----
-    private fun dbFor(s: Source): String? {
+    /**
+     * The database a migration in [s] belongs to: the one it is declared in ([owner], as UsersDatabase.MIGRATION_1_2),
+     * else the only one in its module, else the only one in its package, else the project's only one.
+     */
+    private fun dbFor(s: Source, owner: String): String? {
+        dbs.keys.firstOrNull { owner.startsWith("$it.") }?.let { return it }
         val same = dbs.filter { it.value.src.module == s.module }.keys
         if (same.size == 1) return same.first()
+        val pkg = dbs.filter { it.value.src.pkg == s.pkg }.keys
+        if (pkg.size == 1) return pkg.first()
         return if (dbs.size == 1) dbs.keys.first() else null
     }
 
@@ -188,14 +224,14 @@ class RoomScan(private val p: Project, private val code: Code, private val g: Gr
      * `object : Migration(1, 2) { }`, or Java's `new Migration(1, 2) { }`. [Found.named] is the class,
      * object or property that names it; null when it is written inline, as in addMigrations(object : Migration(1, 2) {...}).
      */
-    private class Found(val args: List<Arg>, val at: PsiElement, val named: Decl?)
+    private class Found(val args: List<Arg>, val at: PsiElement, val named: Decl?, val type: Type? = null, val call: Call? = null)
 
     private fun manualMigrations(s: Source) {
         val found = ArrayList<Found>()
-        for (t in s.types) for (sup in t.supers) if (sup.args != null && sup.type.simple == "Migration") found.add(Found(sup.args, sup.psi, t))
+        for (t in s.types) for (sup in t.supers) if (sup.args != null && sup.type.simple == "Migration") found.add(Found(sup.args, sup.psi, t, type = t))
         for (call in s.calls) {
             if (call.name != "Migration" || (call.receiverName != null && call.receiverName != "migration")) continue
-            found.add(Found(call.args, call.psi, call.assignedTo))
+            found.add(Found(call.args, call.psi, call.assignedTo, call = call))
         }
         for (f in found) {
             val from = eval.evalInt(f.args.arg("startVersion", 0)?.expr)
@@ -207,14 +243,34 @@ class RoomScan(private val p: Project, private val code: Code, private val g: Gr
                 g.addUnresolved("room_migration", name, s.path, line, "versions are not constants")
                 continue
             }
-            val db = dbFor(s)
+            val db = dbFor(s, owner)
             val mid = migrationId(db, from, to, name)
             g.addNode(mid, "room_migration", "$name $from->$to", s.path, line, s.module,
                 mapOf("db" to db, "from_version" to from, "to_version" to to, "style" to "manual", "name" to name, "owner" to owner,
                     "end_line" to (f.named?.endLine ?: s.lineAt(f.at.textRange.endOffset))))
             if (f.named != null) manual.add(Manual(mid, name, s.isTest)) // one passed inline is used where it is written
-            if (db != null) g.addEdge(mid, classId(db), "migrates", s.path, line)
+            if (db != null) {
+                g.addEdge(mid, classId(db), "migrates", s.path, line)
+                bodies.add(body(mid, s, f))
+            }
         }
+    }
+
+    /** The migrate function (or lambda) of a migration and its database parameter; a null scope when it is not in the migration itself. */
+    private fun body(mid: String, s: Source, f: Found): Body {
+        f.type?.let { t ->
+            val fn = t.fns.firstOrNull { it.name == "migrate" } ?: return Body(mid, s, null, null)
+            return Body(mid, s, fn.psi, fn.params.firstOrNull()?.name)
+        }
+        val call = f.call ?: return Body(mid, s, null, null)
+        (call.lambda as? KtLambdaExpression)?.let { l -> return Body(mid, s, l, l.valueParameters.firstOrNull()?.name ?: "it") }
+        val obj = (call.psi as? KtSuperTypeCallEntry)?.let { PsiTreeUtil.getParentOfType(it, KtObjectDeclaration::class.java) }
+        if (obj != null) {
+            val fn = obj.declarations.filterIsInstance<KtNamedFunction>().firstOrNull { it.name == "migrate" } ?: return Body(mid, s, null, null)
+            return Body(mid, s, fn, fn.valueParameters.firstOrNull()?.name)
+        }
+        val method = (call.psi as? PsiNewExpression)?.anonymousClass?.findMethodsByName("migrate", false)?.firstOrNull() ?: return Body(mid, s, null, null)
+        return Body(mid, s, method, method.parameterList.parameters.firstOrNull()?.name)
     }
 
     /**
@@ -245,6 +301,7 @@ class RoomScan(private val p: Project, private val code: Code, private val g: Gr
                 val jv = database?.get("version")?.jsonPrimitive?.intOrNull
                 if (jv != null && jv != version) g.addUnresolved("room_schema", rel, rel, null, "file name says $version, JSON says $jv")
                 hash = database?.text("identityHash")
+                if (database != null) schemaJson[db to version] = database
                 val ts = (database?.get("entities") as? JsonArray)?.filterIsInstance<JsonObject>() ?: emptyList()
                 tablesInFile = ts.mapNotNull { it.text("tableName") }.sorted()
                 schemaTables[db to version] = ts.mapNotNull { t ->
@@ -301,6 +358,97 @@ class RoomScan(private val p: Project, private val code: Code, private val g: Gr
             if (fq !in partialEntityLists) for (t in json.keys.filter { it.lowercase() !in declared }.sorted()) problems.add("table $t is gone")
             if (problems.isNotEmpty()) node.attrs["schema_drift"] = problems
         }
+    }
+
+    // ----- migration SQL -----
+    /**
+     * Replays each manual migration's SQL on the schema file of the version it starts from and compares the result with
+     * the schema file of the version it ends at (see RoomSql). Recorded on the migration as sql_crash, sql_problems and sql_notes.
+     */
+    private fun migrationSql() {
+        if (bodies.isEmpty()) return
+        val minSdk = if (code.sources.any { s -> OWN_SQLITE.any { it in s.text } }) null else minSdk(p)
+        val parsed = HashMap<Pair<String, Int>, Any>()
+        fun schema(db: String, v: Int): SqlSchema? = parsed.getOrPut(db to v) {
+            schemaJson[db to v]?.let { runCatching { RoomSql.schemaOf(it) }.getOrNull() } ?: Unit
+        } as? SqlSchema
+        for (b in bodies) {
+            val node = g.nodes.getValue(b.mid)
+            val db = node.attrs.str("db") ?: continue
+            val from = node.attrs.int("from_version") ?: continue
+            val to = node.attrs.int("to_version") ?: continue
+            if (schemaJson[db to from] == null || schemaJson[db to to] == null) continue
+            val before = schema(db, from)
+            val after = schema(db, to)
+            if (before == null || after == null) {
+                g.addUnresolved("room_migration_sql", node.label, b.s.path, node.line, "the SQL of a schema file could not be read")
+                continue
+            }
+            val calls = sqlCalls(b) ?: continue
+            val afterFile = g.nodes[schemaId(db, to)]?.file?.substringAfterLast('/') ?: "$to.json"
+            val r = RoomSql.replay(before, after, calls, afterFile, minSdk)
+            if (r.unknown != null) {
+                g.addUnresolved("room_migration_sql", node.label, b.s.path, node.line, r.unknown)
+                continue
+            }
+            node.attrs["sql_checked"] = true
+            r.crash?.let { node.attrs["sql_crash"] = it }
+            if (r.problems.isNotEmpty()) node.attrs["sql_problems"] = r.problems
+            if (r.notes.isNotEmpty()) node.attrs["sql_notes"] = r.notes
+        }
+    }
+
+    /**
+     * The SQL a migration runs, in order; null (recorded as unresolved) when droidmap cannot know it: SQL that is not a
+     * constant, SQL that runs only in some cases, or other code that gets the database and may run SQL of its own.
+     * Statements that change rows, not tables, may be anywhere.
+     */
+    private fun sqlCalls(b: Body): List<SqlCall>? {
+        val node = g.nodes.getValue(b.mid)
+        fun unknown(why: String): List<SqlCall>? {
+            g.addUnresolved("room_migration_sql", node.label, b.s.path, node.line, why)
+            return null
+        }
+        val scope = b.scope ?: return unknown("its migrate function is not in the migration itself")
+        val inScope = b.s.calls.filter { it.isInside(scope) }
+        val execs = inScope.filter { it.name == "execSQL" }
+        val sqlArgs = execs.mapNotNull { it.args.firstOrNull()?.psi }
+        for (c in inScope) {
+            if (c.name == "execSQL" || c.name in SCOPE_FNS) continue
+            if (sqlArgs.any { it.textRange.contains(c.psi.textRange) }) continue // part of an execSQL's SQL
+            if (b.param != null && c.receiverName == b.param && c.name !in SAFE_DB_CALLS) return unknown("it calls ${b.param}.${c.name}()")
+            if (b.param != null && c.args.any { it.expr?.text == b.param }) return unknown("it passes ${b.param} to ${c.name}()")
+            if (index.resolveMember(c.name, b.s, c.psi) is Fn) return unknown("it calls ${c.name}(), which may run SQL too")
+        }
+        val out = ArrayList<SqlCall>()
+        for (c in execs.sortedBy { it.psi.textOffset }) {
+            val sql = eval.eval((c.args.arg("sql") ?: c.args.arg(null, 0))?.expr) as? String
+            val dml = sql != null && DML.containsMatchIn(sql)
+            if (sql == null || WILD in sql) { if (dml) continue else return unknown("the SQL on line ${c.line} is not a constant") }
+            if (branched(c.psi, scope)) {
+                if (dml) continue else return unknown("the SQL on line ${c.line} runs only in some cases (in a condition, loop, catch or lambda)")
+            }
+            out.add(SqlCall(sql, c.line))
+        }
+        return out
+    }
+
+    /** Whether [call] runs only in some cases, or more than once: inside a condition, a loop, a try with a catch, or a lambda (except with, apply ...). */
+    private fun branched(call: PsiElement, scope: PsiElement): Boolean {
+        var e: PsiElement? = call.parent
+        while (e != null && e !== scope) {
+            when (e) {
+                is KtTryExpression -> if (e.catchClauses.isNotEmpty() && e.tryBlock.textRange.contains(call.textRange)) return true
+                is PsiTryStatement -> if (e.catchSections.isNotEmpty() && e.tryBlock?.textRange?.contains(call.textRange) == true) return true
+                is KtLambdaExpression -> {
+                    val owner = PsiTreeUtil.getParentOfType(e, KtCallExpression::class.java)
+                    if ((owner?.calleeExpression as? KtNameReferenceExpression)?.getReferencedName() !in SCOPE_FNS) return true
+                }
+                else -> if (BRANCHING.containsMatchIn(e.javaClass.simpleName)) return true
+            }
+            e = e.parent
+        }
+        return false
     }
 
     // ----- tests -----

@@ -86,6 +86,13 @@ class McpServer(private val root: Path, private val configPath: Path? = null, pr
         return b to config
     }
 
+    /** The project's baseline file (droidmap-baseline.json at the root), read each time: it changes when someone updates it. */
+    private fun baseline(): Baseline? = try {
+        Baseline.find(root)
+    } catch (e: IllegalArgumentException) {
+        throw ToolError("cannot read the baseline: ${e.message}")
+    }
+
     @Suppress("UNCHECKED_CAST")
     fun handle(msg: Any?): Map<String, Any?>? {
         if (msg !is Map<*, *>) return error(null, -32600, "Invalid Request")
@@ -144,12 +151,18 @@ class McpServer(private val root: Path, private val configPath: Path? = null, pr
                 val base = (args["base"] as? String)?.trim()?.ifEmpty { null } ?: "HEAD"
                 if (!Git.isCommit(root, base)) throw ToolError("$base is not a commit in the git repository of $root")
                 val changes = try { readChanges(root, base) } catch (e: UsageError) { throw ToolError(e.message ?: "git diff failed") }
-                return formatDiff(diffReport(built, changes, runChecks(g, cfg), ((args["depth"] as? Number)?.toInt() ?: 4).coerceIn(1, 10)),
-                    markdown = false)
+                val all = runChecks(g, cfg)
+                val findings = baseline()?.apply(all)?.findings ?: all
+                return formatDiff(diffReport(built, changes, findings, ((args["depth"] as? Number)?.toInt() ?: 4).coerceIn(1, 10)), markdown = false)
             }
             "droidmap_check" -> {
                 val floor = SEVERITY_ORDER[args["min_severity"] as? String ?: "info"] ?: 2
-                return formatFindings(runChecks(g, cfg).filter { (SEVERITY_ORDER[it.severity] ?: 9) <= floor })
+                val all = runChecks(g, cfg)
+                val b = baseline()
+                val applied = b?.apply(all)
+                val text = formatFindings((applied?.findings ?: all).filter { (SEVERITY_ORDER[it.severity] ?: 9) <= floor })
+                val note = if (b != null && applied != null) baselineNote(b, applied, root) else null
+                return if (note != null) "$text\n$note" else text
             }
             "droidmap_report" -> return reportMarkdown(g, runChecks(g, cfg), root.fileName?.toString() ?: "project")
             "droidmap_find" -> {

@@ -21,6 +21,9 @@ private val USAGE = """
       build  [path] [-o DIR] [--node-link]        scan and write droidmap-out/graph.json and REPORT.md
       check  [path] [--format text|json|sarif] [--fail-on error|warning|info|never] [--sarif FILE]
              [--base REF]                           also compare Room schema files with a git commit
+             [--update-baseline] [--baseline FILE] [--no-baseline]
+                                                   accept today's findings (written to droidmap-baseline.json),
+                                                   so that later checks report only new ones
       impact <node> [path] [--depth N] [--json]   what depends on a node
       show   <node> [path] [--json]                a node, its dependencies and users
       find   <text> [path] [--limit N] [--json]
@@ -168,23 +171,48 @@ class Cli(private val out: PrintStream = System.out, private val err: PrintStrea
         return 0
     }
 
+    /** The baseline check and diff leave known findings out with: --baseline FILE, or droidmap-baseline.json at the root. */
+    private fun baseline(root: Path, a: Args): Baseline? {
+        if (a.flag("--no-baseline")) return null
+        return try {
+            Baseline.find(root, a.opt("--baseline")?.let { Path.of(it) })
+        } catch (e: IllegalArgumentException) {
+            throw UsageError("cannot read the baseline: ${e.message}")
+        }
+    }
+
     private fun check(rest: List<String>): Int {
-        val a = parseArgs(rest, COMMON + setOf("--format", "--fail-on", "--sarif", "--base"), emptySet())
+        val a = parseArgs(rest, COMMON + setOf("--format", "--fail-on", "--sarif", "--base", "--baseline"), setOf("--update-baseline", "--no-baseline"))
         val format = a.opt("--format") ?: "text"
         val failOn = a.opt("--fail-on") ?: "error"
         if (format !in setOf("text", "json", "sarif")) throw UsageError("--format is text, json or sarif")
         if (failOn != "never" && failOn !in SEVERITY_ORDER) throw UsageError("--fail-on is error, warning, info or never")
         val r = root(a.positionals.firstOrNull())
         val (g, cfg) = load(r, a)
-        val findings = runChecks(g, cfg)
+        val all = runChecks(g, cfg)
+        if (a.flag("--update-baseline")) {
+            val path = a.opt("--baseline")?.let { Path.of(it) } ?: r.resolve(BASELINE_NAME)
+            Baseline.write(path, all)
+            out.println("Wrote $path with ${all.size} ${plural(all.size, "finding")}. From now on, droidmap check reports only findings that are not in it; " +
+                "commit the file.")
+            return 0
+        }
+        val b = baseline(r, a)
+        val applied = b?.apply(all)
+        val findings = applied?.findings ?: all
+        val note = if (b != null && applied != null) baselineNote(b, applied, r) else null
         // SARIF paths are relative to where droidmap runs (the repository root in CI), so a
         // project in a subfolder (droidmap check android) still points at the right files.
         val prefix = sarifPrefix(r)
         when (format) {
             "json" -> out.println(jsonText(findings.map { it.toMap() }))
             "sarif" -> out.println(jsonText(toSarif(findings, prefix)))
-            else -> out.println(formatFindings(findings, style))
+            else -> {
+                out.println(formatFindings(findings, style))
+                note?.let { out.println(style.dim(it)) }
+            }
         }
+        if (format != "text") note?.let { err.println("droidmap: $it") }
         a.opt("--sarif")?.let { Files.writeString(Path.of(it), jsonText(toSarif(findings, prefix)) + "\n") }
         val floor = SEVERITY_ORDER[failOn] ?: return 0
         return if (findings.any { (SEVERITY_ORDER[it.severity] ?: 9) <= floor }) 1 else 0
@@ -222,7 +250,7 @@ class Cli(private val out: PrintStream = System.out, private val err: PrintStrea
     }
 
     private fun diff(rest: List<String>): Int {
-        val a = parseArgs(rest, setOf("--config", "--base", "--depth", "--format", "--task"), emptySet())
+        val a = parseArgs(rest, setOf("--config", "--base", "--depth", "--format", "--task", "--baseline"), setOf("--no-baseline"))
         val format = a.opt("--format") ?: "text"
         if (format !in setOf("text", "markdown", "json", "modules", "tasks", "tests")) throw UsageError("--format is text, markdown, json, modules, tasks or tests")
         val r = root(a.positionals.firstOrNull())
@@ -246,7 +274,9 @@ class Cli(private val out: PrintStream = System.out, private val err: PrintStrea
             testTasks(calls.testsReaching(calls.changedKeys(changes)), a.opt("--task") ?: "test").takeIf { it.isNotEmpty() }?.let(out::println)
             return 0
         }
-        val report = diffReport(built, changes, runChecks(built.graph, cfg), a.opt("--depth")?.toIntOrNull() ?: 4)
+        val all = runChecks(built.graph, cfg)
+        val findings = baseline(r, a)?.apply(all)?.findings ?: all
+        val report = diffReport(built, changes, findings, a.opt("--depth")?.toIntOrNull() ?: 4)
         out.println(if (format == "json") jsonText(report.toMap()) else formatDiff(report, markdown = format == "markdown"))
         return 0
     }

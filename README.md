@@ -225,6 +225,7 @@ Kotlin and Java are read with the Kotlin compiler's own parser (the one detekt a
 ```sh
 droidmap init   [path]                               # write the GitHub workflow and MCP config (never overwrites)
 droidmap check  [path] [--format text|json|sarif] [--fail-on error|warning|info|never] [--sarif FILE] [--base REF]
+                [--update-baseline] [--baseline FILE] [--no-baseline]
 droidmap impact <node> [path] [--depth N] [--json]   # what depends on a node
 droidmap diff   [path] [--base REF] [--depth N] [--format text|markdown|json|modules|tasks|tests] [--task NAME]   # what a change touches
 droidmap show   <node> [path] [--json]               # a node, its dependencies and its users
@@ -240,6 +241,10 @@ Without `[path]`, droidmap works on the Gradle project around the current folder
 
 `<node>` can be an id, a name or part of a name: `TopicEntity`, `:core:data`, `"editor?id={id}"`, `HomeViewModel`. `check`, `impact`, `show`, `find` and `report` also take `--config FILE` and `--graph FILE` (use a saved `graph.json` instead of scanning); `build`, `diff` and `mcp` take `--config FILE`.
 
+### Adopting droidmap on a project that already has findings
+
+`droidmap check --update-baseline` writes today's findings to `droidmap-baseline.json` at the project root. Commit it: from then on, `check` (and the GitHub Action, the Gradle plugin, `diff` and the MCP server) report only findings that are not in it, and say how many known ones they left out. A finding stays known when code above it moves or its message gains a detail; it is matched by its rule, file and what it is about, not its line. When you fix known findings, `check` says so, and `--update-baseline` drops them. `--baseline FILE` uses another file, `--no-baseline` shows everything. SARIF results carry a stable fingerprint, so GitHub code scanning follows each alert across commits.
+
 `diff` compares the working tree (committed or not, new files included) with the point where your branch left `--base` (default `HEAD`: the uncommitted changes). A changed line counts for the innermost declaration around it, so editing one function does not mark its whole class.
 
 `check --sarif FILE` also writes the findings as SARIF. `check --base REF` also compares Room schema files with that commit; your last release tag is the most precise choice, since only a shipped schema must never change. Add `droidmap-out/` to your `.gitignore` if you use `build`.
@@ -251,6 +256,7 @@ Exit codes: 0 when done, 1 when `check` finds something at `--fail-on` or above 
 | Rule | Default | Finds |
 |---|---|---|
 | [`room-migration-path`](docs/rules/room-migration-path.md) | error | a known schema version with no migration path to the current version |
+| [`room-migration-sql`](docs/rules/room-migration-sql.md) | error | a manual migration whose SQL, replayed on the schema files, fails (a `NOT NULL` column without a default, a missing table) or leaves tables, columns, indices or foreign keys different from the new version's schema: Room throws on update. Also two statements in one `execSQL` (only the first runs) and `RENAME COLUMN`/`DROP COLUMN` below their Android version |
 | [`room-schema-missing`](docs/rules/room-schema-missing.md) | warning | no exported schema JSON for the current version or an earlier one |
 | [`room-schema-stale`](docs/rules/room-schema-stale.md) | warning | entities that no longer match the schema JSON of the current version: a changed entity without a version bump crashes on update |
 | [`room-schema-changed`](docs/rules/room-schema-changed.md) | warning | with `--base REF`: the schema JSON of a version that already existed at `REF` changed, which is the same crash once that version has shipped |
@@ -260,6 +266,7 @@ Exit codes: 0 when done, 1 when `check` finds something at `--fail-on` or above 
 | [`room-insert-replace`](docs/rules/room-insert-replace.md) | off | `@Insert(onConflict = REPLACE)`, which deletes and re-inserts rows |
 | [`nav-unknown-target`](docs/rules/nav-unknown-target.md) | error | `navigate()` to a route or key no destination registers |
 | [`nav-unreachable`](docs/rules/nav-unreachable.md) | warning | a destination nothing navigates to, starts at or refers to, and that no deep link or menu item opens |
+| [`nav-argument-missing`](docs/rules/nav-argument-missing.md) | warning | a ViewModel that reads `savedStateHandle["topicId"]` when the destination showing it calls its argument `id`: always null |
 | [`nav-deeplink-not-in-manifest`](docs/rules/nav-deeplink-not-in-manifest.md) | warning | a deep link (`navDeepLink`, `<deepLink>`) whose scheme and host no activity's intent filter accepts, so the link does not open the app |
 | [`hilt-missing-binding`](docs/rules/hilt-missing-binding.md) | warning | an injected project type with no `@Inject` constructor, `@Provides` or `@Binds` |
 | [`hilt-duplicate-binding`](docs/rules/hilt-duplicate-binding.md) | error | the same type and qualifier bound twice in one source set |
@@ -272,6 +279,7 @@ Exit codes: 0 when done, 1 when `check` finds something at `--fail-on` or above 
 | [`gradle-cycle`](docs/rules/gradle-cycle.md) | error | modules that depend on each other in a cycle |
 | [`manifest-permission`](docs/rules/manifest-permission.md) | error | a permission not in your `allowed_permissions`, in a source manifest or added by a library to the merged one |
 | [`gson-model-not-kept`](docs/rules/gson-model-not-kept.md) | warning | a class Gson reads by reflection (`fromJson`, `TypeToken`, a Retrofit API with `GsonConverterFactory`) whose fields R8 renames in a minified release build: no `@SerializedName`, `@Keep` or keep rule. Debug works, release reads empty fields |
+| [`moshi-model-not-kept`](docs/rules/moshi-model-not-kept.md) | warning | the same for Moshi without code generation (`moshi.adapter(X::class.java)`, a Retrofit API with `MoshiConverterFactory`): a class with no `@JsonClass(generateAdapter = true)` whose fields have no `@Json(name)` |
 
 ## Configuration
 

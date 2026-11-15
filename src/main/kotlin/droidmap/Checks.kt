@@ -8,6 +8,7 @@ import droidmap.extract.navGraphName
  */
 enum class Rule(val id: String, val severity: String, val description: String) {
     ROOM_MIGRATION_PATH("room-migration-path", "error", "Every known schema version has a migration path to the current version"),
+    ROOM_MIGRATION_SQL("room-migration-sql", "error", "A manual migration's SQL, replayed on the schema files, runs and produces the tables Room expects for the new version"),
     ROOM_SCHEMA_MISSING("room-schema-missing", "warning", "Schema JSON is exported for the current version and every version before it"),
     ROOM_SCHEMA_STALE("room-schema-stale", "warning", "The entities match the schema JSON of the database's current version (else the version was not bumped)"),
     ROOM_SCHEMA_CHANGED("room-schema-changed", "warning", "With --base: no schema JSON of a version that existed there has changed (a shipped schema must never change)"),
@@ -17,6 +18,7 @@ enum class Rule(val id: String, val severity: String, val description: String) {
     ROOM_INSERT_REPLACE("room-insert-replace", "off", "@Insert/@Upsert with OnConflictStrategy.REPLACE deletes and re-inserts rows"),
     NAV_UNKNOWN_TARGET("nav-unknown-target", "error", "navigate() to a route or key that no destination registers"),
     NAV_UNREACHABLE("nav-unreachable", "warning", "A destination that nothing navigates to, starts at, deep-links to, opens from a menu or references"),
+    NAV_ARGUMENT_MISSING("nav-argument-missing", "warning", "A ViewModel reads a SavedStateHandle key that no destination showing it has as an argument, so it is always null there"),
     NAV_DEEPLINK_NOT_IN_MANIFEST("nav-deeplink-not-in-manifest", "warning", "A navigation deep link whose scheme and host no activity's intent filter accepts, so the link does not open the app"),
     HILT_APP_NOT_REGISTERED("hilt-app-not-registered", "error", "@AndroidEntryPoint classes without a @HiltAndroidApp Application that the manifest names: a crash when they open"),
     HILT_FRAGMENT_HOST("hilt-fragment-host", "error", "An @AndroidEntryPoint fragment hosted by an activity that is not @AndroidEntryPoint: a crash when the fragment is attached"),
@@ -28,6 +30,7 @@ enum class Rule(val id: String, val severity: String, val description: String) {
     GRADLE_FORBIDDEN_DEPENDENCY("gradle-forbidden-dependency", "error", "A module dependency banned by a [[gradle.forbid]] rule"),
     GRADLE_CYCLE("gradle-cycle", "error", "Modules that depend on each other in a cycle"),
     MANIFEST_PERMISSION("manifest-permission", "error", "A permission (in a source manifest, or added by a library to the merged one) that is not in [manifest] allowed_permissions"),
+    MOSHI_MODEL_NOT_KEPT("moshi-model-not-kept", "warning", "A class Moshi reads by reflection (no @JsonClass(generateAdapter = true)), in a release build that R8 shrinks, with fields that no @Json(name), @Keep or keep rule protects"),
     GSON_MODEL_NOT_KEPT("gson-model-not-kept", "warning", "A class Gson reads by reflection, in a release build that R8 shrinks, with fields that no @SerializedName, @Keep or keep rule protects"),
     ;
 
@@ -44,17 +47,22 @@ const val RULES_URL = "https://github.com/hussainshirazi/droidmap/blob/main/docs
 val RULES: Map<String, Rule> = Rule.entries.associateBy { it.id }.toSortedMap()
 val SEVERITY_ORDER = mapOf("error" to 0, "warning" to 1, "info" to 2)
 
-data class Finding(val rule: String, var severity: String, val message: String, val file: String?, val line: Int?, val node: String?) {
+/**
+ * A rule's finding. [key] names what it is about when one node can have several (each caller of an unknown route,
+ * each fragment of an activity), so that a baseline (see [identity]) tells them apart; by default the node is.
+ */
+data class Finding(val rule: String, var severity: String, val message: String, val file: String?, val line: Int?, val node: String?,
+                   val key: String? = null) {
     fun toMap(): Map<String, Any?> = linkedMapOf(
         "rule" to rule, "severity" to severity, "message" to message, "file" to file, "line" to line, "node" to node)
 }
 
-private fun finding(rule: Rule, message: String, file: String? = null, line: Int? = null, node: String? = null) =
-    Finding(rule.id, rule.severity, message, file, line, node)
+private fun finding(rule: Rule, message: String, file: String? = null, line: Int? = null, node: String? = null, key: String? = null) =
+    Finding(rule.id, rule.severity, message, file, line, node, key)
 
 fun runChecks(g: Graph, config: Config = Config()): List<Finding> {
-    val all = room(g) + nav(g) + deepLinks(g) + di(g) + hiltApp(g) + fragmentHosts(g) + workManager(g) + gradle(g, config) + manifest(g, config) +
-        gsonModels(g)
+    val all = room(g) + nav(g) + navArguments(g) + deepLinks(g) + di(g) + hiltApp(g) + fragmentHosts(g) + workManager(g) + gradle(g, config) + manifest(g, config) +
+        gsonModels(g) + moshiModels(g)
     val out = ArrayList<Finding>()
     for (f in all) {
         val sev = config.severities[f.rule] ?: f.severity
@@ -126,6 +134,7 @@ private fun room(g: Graph): List<Finding> {
                     "(${steps.joinToString(", ") { "${it.first}->${it.second}" }})", db.file, db.line, db.id))
         }
     }
+    for (n in g.byKind("room_migration")) migrationSql(n)?.let { out.add(it) }
     for (n in g.byKind("room_migration")) {
         if (n.attrs.str("style") == "manual" && n.attrs.int("references") == 0) {
             out.add(finding(Rule.ROOM_MIGRATION_UNUSED,
@@ -144,14 +153,35 @@ private fun room(g: Graph): List<Finding> {
     }
     for (fb in g.meta.maps("room_destructive_fallback")) {
         out.add(finding(Rule.ROOM_DESTRUCTIVE_FALLBACK,
-            "${fb.str("call")}() deletes the user's database whenever a migration is missing", fb.str("file"), fb.int("line")))
+            "${fb.str("call")}() deletes the user's database whenever a migration is missing", fb.str("file"), fb.int("line"), key = fb.str("call")))
     }
     for (e in g.edgesOf("writes")) for (r in e.attrs.maps("replace")) {
         out.add(finding(Rule.ROOM_INSERT_REPLACE,
             "${r.str("function")} uses OnConflictStrategy.REPLACE, which deletes the old row (and cascades) instead of updating it",
-            r.str("file") ?: e.file, r.int("line"), e.source))
+            r.str("file") ?: e.file, r.int("line"), e.source, key = "${e.target} ${r.str("function")}"))
     }
     return out
+}
+
+/** What replaying a manual migration's SQL on the schema files found (see RoomSql). */
+private fun migrationSql(n: Node): Finding? {
+    val crash = n.attrs.str("sql_crash")
+    val problems = n.attrs.strings("sql_problems")
+    val notes = n.attrs.strings("sql_notes")
+    if (crash == null && problems.isEmpty() && notes.isEmpty()) return null
+    val name = n.attrs.str("name") ?: n.label
+    val from = n.attrs.int("from_version")
+    val to = n.attrs.int("to_version")
+    val shown = problems.take(5).joinToString("; ") + if (problems.size > 5) "; and ${problems.size - 5} more" else ""
+    val text = when {
+        crash != null -> "$name ($from->$to) fails at $crash, so users on version $from crash when they update"
+        problems.isNotEmpty() -> "$name ($from->$to) does not produce the tables of version $to: $shown. Room compares the tables with " +
+            "its schema after migrating and throws IllegalStateException (\"Migration didn't properly handle ...\"), so users on version $from " +
+            "crash when they update"
+        else -> "$name ($from->$to)"
+    }
+    val also = if (notes.isEmpty()) "" else (if (crash != null || problems.isNotEmpty()) ". Also: " else ": ") + notes.joinToString("; ")
+    return finding(Rule.ROOM_MIGRATION_SQL, text + also, n.file, n.line, n.id)
 }
 
 // ----- navigation -----
@@ -162,7 +192,7 @@ private fun nav(g: Graph): List<Finding> {
         if (!n.attrs.bool("registered")) {
             for (e in incoming) if (e.kind == "navigates_to" || e.kind == "starts_at") {
                 out.add(finding(Rule.NAV_UNKNOWN_TARGET,
-                    "${g.label(e.source)} navigates to ${n.label}, but no destination registers it", e.file, e.line, n.id))
+                    "${g.label(e.source)} navigates to ${n.label}, but no destination registers it", e.file, e.line, n.id, key = "${e.source} -> ${n.id}"))
             }
             continue
         }
@@ -174,6 +204,19 @@ private fun nav(g: Graph): List<Finding> {
                 hint(g, "nav_target", "navigate calls"), n.file, n.line, n.id))
     }
     return out
+}
+
+/** A ViewModel reads a navigation argument by a name its destinations do not use. */
+private fun navArguments(g: Graph): List<Finding> = g.meta.maps("nav_argument_missing").map { m ->
+    val vm = m.str("viewmodel")!!.substringAfterLast('.')
+    val key = m.str("key")
+    val dests = m.strings("destinations")
+    val args = m.strings("arguments")
+    val where = if (dests.size == 1) "the destination that shows it, ${dests[0]}," else "none of the destinations that show it (${dests.joinToString(", ")})"
+    val has = if (args.isEmpty()) "no arguments" else "the arguments ${args.joinToString(", ")}"
+    finding(Rule.NAV_ARGUMENT_MISSING,
+        "$vm reads \"$key\" from its SavedStateHandle, but $where has no argument named $key (it has $has), so the value is always null " +
+            "(or the default): rename the key or the argument so that they match", m.str("file"), m.int("line"), "class::${m.str("viewmodel")}", key = key)
 }
 
 /** (scheme, host) of an absolute URI whose scheme and host are constant, lower case; null otherwise. */
@@ -211,7 +254,7 @@ private fun deepLinks(g: Graph): List<Finding> {
                 (if (xmlGraph != null) ", or <nav-graph android:value=\"@navigation/$xmlGraph\" />" else "")
             out.add(finding(Rule.NAV_DEEPLINK_NOT_IN_MANIFEST,
                 "${n.label} has the deep link $uri, but no activity's intent filter accepts $scheme://$host, so the link opens a browser " +
-                    "or nothing instead of the app (an explicit intent from inside the app still works): $fix", n.file, n.line, n.id))
+                    "or nothing instead of the app (an explicit intent from inside the app still works): $fix", n.file, n.line, n.id, key = "${n.id} $uri"))
         }
     }
     return out
@@ -239,15 +282,15 @@ private fun di(g: Graph): List<Finding> {
             finding(Rule.KOIN_MISSING_DEFINITION,
                 "${g.label(e.source)} gets ${t.label} from Koin, but $who is in ${u.str("package")?.ifEmpty { "the default package" }}, " +
                     "which no @ComponentScan covers, so Koin never defines it (NoDefinitionFoundException at runtime): " +
-                    "add the package to a module's @ComponentScan", e.file, e.line, t.id)
+                    "add the package to a module's @ComponentScan", e.file, e.line, t.id, key = "${e.source} -> ${t.id}")
         } else if (e.attrs.bool("koin")) {
             finding(Rule.KOIN_MISSING_DEFINITION,
                 "${g.label(e.source)} gets ${t.label} from Koin, but no Koin definition provides it (NoDefinitionFoundException " +
-                    "at runtime)" + hint(g, "koin_definition", "Koin definitions"), e.file, e.line, t.id)
+                    "at runtime)" + hint(g, "koin_definition", "Koin definitions"), e.file, e.line, t.id, key = "${e.source} -> ${t.id}")
         } else {
             finding(Rule.HILT_MISSING_BINDING,
                 "${g.label(e.source)} injects ${t.label}, but nothing binds it (no @Inject constructor, @Provides or @Binds in this project)",
-                e.file, e.line, t.id)
+                e.file, e.line, t.id, key = "${e.source} -> ${t.id}")
         })
     }
     val groups = LinkedHashMap<Pair<String, String?>, MutableList<Node>>()
@@ -265,7 +308,7 @@ private fun di(g: Graph): List<Finding> {
         for (c in clash) {
             out.add(finding(Rule.HILT_DUPLICATE_BINDING,
                 "${key.first}${key.second?.let { " @$it" } ?: ""} is bound more than once: ${c.map { it.label }.sorted().joinToString(", ")}",
-                c[0].file, c[0].line, c[0].id))
+                c[0].file, c[0].line, c[0].id, key = "${key.first} ${key.second ?: ""}".trim()))
         }
     }
     return out
@@ -309,7 +352,7 @@ private fun fragmentHosts(g: Graph): List<Finding> = g.meta.maps("hilt_fragment_
     finding(Rule.HILT_FRAGMENT_HOST,
         "$activity hosts $fragment (an @AndroidEntryPoint fragment) through ${h.str("via")}, but $activity is not @AndroidEntryPoint: " +
             "Hilt throws IllegalStateException (\"Hilt Fragments must be attached to an @AndroidEntryPoint Activity\") when $fragment " +
-            "is attached. Annotate $activity with @AndroidEntryPoint", h.str("file"), h.int("line"), "class::${h.str("activity")}")
+            "is attached. Annotate $activity with @AndroidEntryPoint", h.str("file"), h.int("line"), "class::${h.str("activity")}", key = "${h.str("activity")} ${h.str("fragment")}")
 }
 
 /** R8 renames fields, and Gson finds them by name. */
@@ -323,6 +366,18 @@ private fun gsonModels(g: Graph): List<Finding> = g.meta.maps("gson_unkept_model
             "Add @SerializedName to each field, @Keep to the class, or a -keep rule", m.str("file"), m.int("line"), "class::${m.str("class")}")
 }
 
+/** Moshi's reflection (without code generation) finds fields by name too. */
+private fun moshiModels(g: Graph): List<Finding> = g.meta.maps("moshi_unkept_models").map { m ->
+    val fields = (m["fields"] as? List<*>)?.map { it.toString() } ?: emptyList()
+    val shown = fields.take(4).joinToString(", ") + if (fields.size > 4) " and ${fields.size - 4} more" else ""
+    finding(Rule.MOSHI_MODEL_NOT_KEPT,
+        "${m.str("label")} is read by Moshi through reflection (${m.str("used_in")}; it has no @JsonClass(generateAdapter = true)), and release " +
+            "builds are shrunk by R8 (minifyEnabled in ${m.str("minify")}), but its fields $shown have no @Json(name = ...), and no @Keep or keep " +
+            "rule protects them: R8 renames them, so in release builds they are left empty when JSON is read and written under the wrong names. " +
+            "Use Moshi's code generation (@JsonClass(generateAdapter = true) with the moshi-kotlin-codegen processor), or add @Json(name = ...) to " +
+            "each field, @Keep to the class, or a -keep rule", m.str("file"), m.int("line"), "class::${m.str("class")}")
+}
+
 /** WorkManager makes @HiltWorker classes only through HiltWorkerFactory, and asks the Application for it only once its own initializer is removed. */
 private fun workManager(g: Graph): List<Finding> {
     val out = ArrayList<Finding>()
@@ -333,14 +388,14 @@ private fun workManager(g: Graph): List<Finding> {
             "${workers.mapNotNull { it.str("name") }.sorted().joinToString(", ")} ${if (workers.size > 1) "are @HiltWorkers" else "is a @HiltWorker"}, " +
                 "but nothing in the app uses HiltWorkerFactory: WorkManager's default factory cannot call an @AssistedInject constructor, " +
                 "so the work fails (\"Could not instantiate\"). Give WorkManager the factory: the Application implements Configuration.Provider " +
-                "with setWorkerFactory(workerFactory)", w.str("file"), w.int("line")))
+                "with setWorkerFactory(workerFactory)", w.str("file"), w.int("line"), key = "worker factory"))
     }
     if (g.meta["work_initializer_removed"] != true) for (p in g.meta.maps("work_config_providers")) {
         out.add(finding(Rule.WORKMANAGER_SETUP,
             "${p.str("name")} implements Configuration.Provider, but the manifest keeps WorkManager's default initializer, which starts " +
                 "WorkManager with the default configuration first, so this one${if (workers.isNotEmpty()) " (and its worker factory)" else ""} " +
                 "is never used: remove androidx.work.WorkManagerInitializer from androidx.startup.InitializationProvider with tools:node=\"remove\"",
-            p.str("file"), p.int("line")))
+            p.str("file"), p.int("line"), key = "initializer ${p.str("name")}"))
     }
     return out
 }
@@ -353,7 +408,7 @@ private fun gradle(g: Graph, config: Config): List<Finding> {
         val t = g.nodes[e.target] ?: continue
         if (t.attrs.bool("missing")) {
             out.add(finding(Rule.GRADLE_UNKNOWN_PROJECT, "${g.label(e.source)} depends on ${t.label}, which settings does not include",
-                e.file, e.line, e.target))
+                e.file, e.line, e.target, key = "${e.source} -> ${e.target}"))
         }
     }
     for (rule in config.forbid) {
@@ -368,7 +423,7 @@ private fun gradle(g: Graph, config: Config): List<Finding> {
             val reason = (rule["reason"] as? String)?.let { ": $it" } ?: ""
             val via = e.attrs.str("via")?.let { " (added by plugin $it)" } ?: ""
             out.add(finding(Rule.GRADLE_FORBIDDEN_DEPENDENCY,
-                "$s depends on $t$via, which a forbid rule bans ($from -> $to)$reason", e.file, e.line, e.source))
+                "$s depends on $t$via, which a forbid rule bans ($from -> $to)$reason", e.file, e.line, e.source, key = "$s -> $t"))
         }
     }
     out += cycles(g, deps.filter { !it.attrs.bool("test") })
@@ -413,7 +468,7 @@ private fun cycles(g: Graph, edges: List<Edge>): List<Finding> {
     }
     return comps.map { comp ->
         val first = g.nodes[comp[0]]!!
-        finding(Rule.GRADLE_CYCLE, "Module cycle: ${comp.joinToString(" -> ") { g.label(it) }}", first.file, first.line, comp[0])
+        finding(Rule.GRADLE_CYCLE, "Module cycle: ${comp.joinToString(" -> ") { g.label(it) }}", first.file, first.line, comp[0], key = comp.joinToString(" "))
     }
 }
 
@@ -430,8 +485,9 @@ private fun manifest(g: Graph, config: Config): List<Finding> {
                         (e.attrs.strings("added_by").takeIf { it.isNotEmpty() }?.let { ", added by ${it.joinToString(", ")}" } ?: "") +
                         ", which is not in allowed_permissions: remove it with tools:node=\"remove\" in the app's manifest, or allow it" +
                         (if (e.attrs.bool("stale")) " (the merged manifest is older than the build files: build again to refresh it)" else ""),
-                    e.file, e.line, e.target)
-                else -> finding(Rule.MANIFEST_PERMISSION, "${g.label(e.source)} declares $name, which is not in allowed_permissions", e.file, e.line, e.target)
+                    e.file, e.line, e.target, key = "${e.source} merged $name")
+                else -> finding(Rule.MANIFEST_PERMISSION, "${g.label(e.source)} declares $name, which is not in allowed_permissions", e.file, e.line, e.target,
+                    key = "${e.source} $name")
             }
         }
 }

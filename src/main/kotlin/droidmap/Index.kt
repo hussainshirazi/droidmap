@@ -198,7 +198,7 @@ class Evaluator(private val index: Index) {
         is KtPrefixExpression -> if (e.operationToken == KtTokens.MINUS) (eval(e.baseExpression, depth + 1) as? Long)?.let { -it } else null
         is KtBinaryExpression -> if (e.operationToken == KtTokens.PLUS) plus(eval(e.left, depth + 1), eval(e.right, depth + 1)) else null
         is KtNameReferenceExpression -> valueOf(e.getReferencedName(), e, depth)
-        is KtDotQualifiedExpression -> kotlinChain(e)?.let { chain ->
+        is KtDotQualifiedExpression -> trimmed(e, depth) ?: kotlinChain(e)?.let { chain ->
             if (e.selectorExpression is KtCallExpression) call(chain, e, depth) else valueOf(chain, e, depth)
         }
         is KtCallExpression -> (e.calleeExpression as? KtNameReferenceExpression)?.let { call(it.getReferencedName(), e, depth) }
@@ -217,6 +217,17 @@ class Evaluator(private val index: Index) {
         is PsiReferenceExpression -> javaChain(e)?.let { valueOf(it, e, depth) }
         is PsiMethodCallExpression -> javaChain(e.methodExpression)?.let { call(it, e, depth) }
         else -> null
+    }
+
+    /** `"""..."""`.trimIndent() and .trimMargin() (with no argument or a constant one), as SQL is often written. */
+    private fun trimmed(e: KtDotQualifiedExpression, depth: Int): String? {
+        val sel = e.selectorExpression as? KtCallExpression ?: return null
+        val name = (sel.calleeExpression as? KtNameReferenceExpression)?.getReferencedName() ?: return null
+        if (name != "trimIndent" && name != "trimMargin") return null
+        val s = eval(e.receiverExpression, depth + 1) as? String ?: return null
+        if (name == "trimIndent") return if (sel.valueArguments.isEmpty()) s.trimIndent() else null
+        val prefix = sel.valueArguments.singleOrNull()?.let { eval(it.getArgumentExpression(), depth + 1) as? String ?: return null } ?: "|"
+        return if (prefix.isBlank()) null else s.trimMargin(prefix)
     }
 
     private fun plus(a: Any?, b: Any?): Any? = when {

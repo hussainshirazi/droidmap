@@ -8,8 +8,10 @@ import droidmap.Graph
 import droidmap.KotlinReader
 import droidmap.Project
 import droidmap.Source
+import droidmap.Type
 import droidmap.WILD
 import droidmap.arg
+import droidmap.find
 import org.jetbrains.kotlin.com.intellij.psi.PsiElement
 import org.jetbrains.kotlin.com.intellij.psi.PsiReferenceExpression
 import org.jetbrains.kotlin.com.intellij.psi.util.PsiTreeUtil
@@ -38,6 +40,9 @@ private val NOT_DESTINATIONS = setOf("action", "argument", "deepLink", "include"
 private val R_ID = Regex("""^(?:[\w.]+\.)?R\.id\.(\w+)$""")
 /** A Safe Args call: `HomeFragmentDirections.actionHomeToDetail(...)`, also inside a chain such as `.setItemId(5)`. */
 private val DIRECTIONS = Regex("""\b([A-Z]\w*Directions)\s*\.\s*(\w+)\s*\(""")
+
+/** {name} in a string route: one of its arguments. */
+private val ROUTE_ARG = Regex("""\{(\w+)\}""")
 
 /** How Safe Args names generated code, compared without case or underscores: action_home_to_detail and actionHomeToDetail are one name. */
 private fun safeArgsKey(name: String) = name.replace("_", "").lowercase()
@@ -182,12 +187,29 @@ class NavScan(private val p: Project, private val code: Code, private val g: Gra
                 else -> null
             }
             g.addNode(nid, "nav_destination", display(v), s.path, call.line, s.module,
-                mapOf("route" to display(v), "style" to "string", "route_constant" to constant, "end_line" to call.endLine) + common)
+                mapOf("route" to display(v), "style" to "string", "route_constant" to constant, "end_line" to call.endLine,
+                    "arguments" to stringArguments(v, call)) + common)
             stringDests[v] = nid
         }
         registered(s, call, nid)
         if (name == "navigation") pendingStarts.add(nid to call)
     }
+
+    /** The arguments of a string route: its {placeholders} and the names of its navArgument(...) entries. */
+    private fun stringArguments(route: String, call: Call): List<String> {
+        val names = ROUTE_ARG.findAll(route).map { it.groupValues[1] }.toSortedSet()
+        for (c in PsiTreeUtil.findChildrenOfType(call.args.arg("arguments")?.psi, KtCallExpression::class.java)) {
+            if ((c.calleeExpression as? KtNameReferenceExpression)?.getReferencedName() != "navArgument") continue
+            (code.eval.eval(KotlinReader.args(c.valueArgumentList).arg("name", 0)?.expr) as? String)?.let { names.add(it) }
+        }
+        return names.toList()
+    }
+
+    /** The arguments of a type-safe route: its constructor's properties, under their @SerialName when they have one. */
+    private fun typeArguments(d: Type): List<String> =
+        (d.ctors.firstOrNull()?.params ?: emptyList()).mapNotNull { p ->
+            p.anns.find("SerialName")?.let { a -> code.eval.eval(a.args.arg("value", 0)?.expr) as? String } ?: p.name
+        }.sorted()
 
     private fun registered(s: Source, call: Call, nid: String) {
         fnNode(call.fn)?.let { g.addEdge(it, nid, "registers", s.path, call.line) }
@@ -199,8 +221,11 @@ class NavScan(private val p: Project, private val code: Code, private val g: Gra
         val d = index.resolveType(typeName, s, call.psi)
         val fq = d?.fq ?: typeName
         val nid = destId(fq)
+        // Navigation 3 keeps a key's values on the key itself: only Navigation's own type-safe routes have arguments by name.
+        val arguments = if (d != null && common["api"] == "compose") typeArguments(d) else null
         g.addNode(nid, "nav_destination", fq.substringAfterLast('.'), d?.src?.path ?: s.path, d?.line ?: call.line,
-            d?.src?.module ?: s.module, mapOf("route" to fq, "style" to "type", "resolved" to flag(d != null), "end_line" to (d?.endLine ?: call.endLine)) + common)
+            d?.src?.module ?: s.module, mapOf("route" to fq, "style" to "type", "resolved" to flag(d != null), "end_line" to (d?.endLine ?: call.endLine),
+                "arguments" to arguments) + common)
         typeDests[fq] = nid
         if (d != null) nodeForClass(g, d, "nav_route")
         return nid
@@ -308,7 +333,8 @@ class NavScan(private val p: Project, private val code: Code, private val g: Gra
                 mapOf("route" to "@id/$key", "style" to "xml", "api" to "xml", "registered" to true,
                     "graph" to flag(el.localName == "navigation"), "dialog" to flag(el.localName == "dialog"),
                     "deep_link" to flag(el.childElements().any { it.localName == "deepLink" }), "class_name" to name,
-                    "deep_link_uris" to el.childElements().filter { it.localName == "deepLink" }.mapNotNull { it.attr(APP_NS, "uri") }.ifEmpty { null }))
+                    "deep_link_uris" to el.childElements().filter { it.localName == "deepLink" }.mapNotNull { it.attr(APP_NS, "uri") }.ifEmpty { null },
+                    "arguments" to el.childElements().filter { it.localName == "argument" }.mapNotNull { it.attr(ANDROID_NS, "name") }.sorted()))
             xmlIds[key] = nid
             if (name != null && name in index.types) g.addEdge(nid, classId(name), "shows", rel)
         }
