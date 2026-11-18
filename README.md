@@ -1,3 +1,5 @@
+<img src="docs/logo.svg" alt="" width="96" align="right">
+
 # droidmap
 
 [![CI](https://github.com/hussainshirazi/droidmap/actions/workflows/ci.yml/badge.svg)](https://github.com/hussainshirazi/droidmap/actions/workflows/ci.yml)

@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128" role="img" aria-label="droidmap">
+  <defs>
+    <linearGradient id="tile" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#14213A"/>
+      <stop offset="1" stop-color="#0A1222"/>
+    </linearGradient>
+  </defs>
+  <rect width="128" height="128" rx="28" fill="url(#tile)"/>
+  <!-- a folded map -->
+  <path d="M20 37 L47 28 V92 L20 101 Z" fill="#1E3352"/>
+  <path d="M47 28 L81 37 V101 L47 92 Z" fill="#2A4670"/>
+  <path d="M81 37 L108 28 V92 L81 101 Z" fill="#1E3352"/>
+  <!-- the project graph drawn on it -->
+  <g stroke="#3DDC84" stroke-width="6" stroke-linecap="round" fill="none">
+    <path d="M33 77 L62 52"/>
+    <path d="M62 52 L93 68"/>
+  </g>
+  <circle cx="33" cy="77" r="8.5" fill="#3DDC84" stroke="#0E1A2E" stroke-width="3"/>
+  <circle cx="62" cy="52" r="8.5" fill="#3DDC84" stroke="#0E1A2E" stroke-width="3"/>
+  <circle cx="93" cy="68" r="11" fill="#0E1A2E" stroke="#3DDC84" stroke-width="5"/>
+  <circle cx="93" cy="68" r="3.5" fill="#3DDC84"/>
+</svg>

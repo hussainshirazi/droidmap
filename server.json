@@ -3,6 +3,22 @@
   "name": "io.github.hussainshirazi/droidmap",
   "title": "droidmap",
   "description": "Android project graph: change impact and checks for Room, navigation, Hilt, Koin and Gradle",
+  "icons": [
+    {
+      "src": "https://raw.githubusercontent.com/hussainshirazi/droidmap/main/docs/logo-512.png",
+      "mimeType": "image/png",
+      "sizes": [
+        "512x512"
+      ]
+    },
+    {
+      "src": "https://raw.githubusercontent.com/hussainshirazi/droidmap/main/docs/logo.svg",
+      "mimeType": "image/svg+xml",
+      "sizes": [
+        "any"
+      ]
+    }
+  ],
   "version": "0.4.0",
   "repository": {
     "url": "https://github.com/hussainshirazi/droidmap",
