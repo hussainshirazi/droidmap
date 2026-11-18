@@ -84,7 +84,7 @@ Docker, for CI systems other than GitHub Actions (GitLab, Bitbucket, Jenkins, Bi
 Gradle (from version 0.3.0), in the root `build.gradle.kts`; then `./gradlew droidmapCheck` fails the build on errors:
 
 ```kotlin
-plugins { id("io.github.hussainshirazi.droidmap") version "0.4.0" }
+plugins { id("io.github.hussainshirazi.droidmap") version "0.4.1" }
 
 droidmap {
     failOn.set("warning")       // error (the default), warning, info or never

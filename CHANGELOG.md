@@ -1,9 +1,10 @@
 # Changelog
 
-## Unreleased
+## 0.4.1 (2026-11-18)
 
 - The MCP tools say when to use each one and which to use instead, what each returns, and that they only read the project (MCP tool annotations), and every parameter has a description.
 - `droidmap_diff` over MCP runs the rules that compare with the base too (a shipped Room schema or a stored enum constant changed, a Worker renamed), as `droidmap diff` does.
+- A logo, which the MCP Registry entry now shows as its icon.
 
 ## 0.4.0 (2026-11-18)
 
