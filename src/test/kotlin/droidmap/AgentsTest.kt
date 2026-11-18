@@ -50,6 +50,39 @@ class AgentsTest {
     }
 
     @Test
+    fun everyToolSaysItOnlyReadsAndDescribesEveryParameter() {
+        for (t in TOOLS) {
+            val name = t["name"]
+            val annotations = t["annotations"] as Map<*, *>
+            assertEquals(true, annotations["readOnlyHint"], "$name")
+            assertEquals(false, annotations["destructiveHint"], "$name")
+            assertTrue((t["description"] as String).contains("Use it"), "$name says when to use it")
+            val schema = t["inputSchema"] as Map<*, *>
+            for ((param, spec) in schema["properties"] as Map<*, *>) {
+                assertTrue(((spec as Map<*, *>)["description"] as? String).orEmpty().isNotBlank(), "$name.$param has no description")
+            }
+            for (param in (schema["required"] as? List<*>).orEmpty()) assertTrue(param in (schema["properties"] as Map<*, *>).keys, "$name.$param")
+        }
+    }
+
+    @Test
+    fun mcpDiffRunsTheRulesThatCompareWithTheBase() {
+        fun status(constants: String) = "app/src/main/kotlin/com/x/Status.kt" to "package com.x\nenum class Status { $constants }"
+        val p = TestProject(tmp.resolve("p")).write(*APP, status("ACTIVE, PAUSED"),
+            "app/src/main/kotlin/com/x/Sub.kt" to """
+                package com.x
+                import androidx.room.Entity
+                import androidx.room.PrimaryKey
+                @Entity(tableName = "subscriptions") data class Sub(@PrimaryKey val id: Long, val status: Status)""").commitAll()
+        p.write(status("ACTIVE"))
+        val s = McpServer(p.root, log = PrintStream(ByteArrayOutputStream()))
+        val r = s.handle(mapOf("jsonrpc" to "2.0", "id" to 1, "method" to "tools/call",
+            "params" to mapOf("name" to "droidmap_diff", "arguments" to emptyMap<String, Any>())))!!["result"] as Map<*, *>
+        val text = ((r["content"] as List<*>)[0] as Map<*, *>)["text"].toString()
+        assertTrue("room-enum-constant-removed" in text, text)
+    }
+
+    @Test
     fun theStopHookBlocksOnlyOnErrorsTheSessionAdded() {
         val p = TestProject(tmp.resolve("p")).write(*APP, nav("ghost")) // an error before the session: not Claude's
         val data = tmp.resolve("data")

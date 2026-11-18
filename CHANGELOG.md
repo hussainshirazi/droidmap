@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- The MCP tools say when to use each one and which to use instead, what each returns, and that they only read the project (MCP tool annotations), and every parameter has a description.
+- `droidmap_diff` over MCP runs the rules that compare with the base too (a shipped Room schema or a stored enum constant changed, a Worker renamed), as `droidmap diff` does.
+
 ## 0.4.0 (2026-11-18)
 
 - New rules for code that compiles but fails at runtime: `component-not-in-manifest` (an activity, service or receiver the code sends an explicit Intent to that no manifest declares: `ActivityNotFoundException`), `hilt-viewmodel-factory` (a `@HiltViewModel` got with `viewModel()` in a navigation destination, `by viewModels()` outside an `@AndroidEntryPoint`, or `by navGraphViewModels()`: "Cannot create an instance of class"), `datastore-duplicate-file` (two DataStores on one file, or one built in a provider that is not a singleton), `room-database-not-singleton`, `nav-route-type-unsupported` (a type-safe route property with no NavType and no `typeMap`), `notification-channel-missing` (a notification for a channel the app never creates: not shown from Android 8), and `intent-extra-missing` and `worker-input-missing` (an extra or a worker input read under a key no sender puts: always null).

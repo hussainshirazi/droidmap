@@ -13,49 +13,91 @@ import java.nio.file.Path
 val PROTOCOL_VERSIONS = listOf("2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05")
 
 private val NODE_ARG = mapOf("type" to "string", "description" to
-    "Node id, name or part of a name (e.g. 'TopicEntity', ':core:data', 'editor?id={id}', 'AppDatabase').")
+    "The node: its id as droidmap_find prints it, its name, or part of a name, such as 'TopicEntity', ':core:data', " +
+    "'editor?id={id}' or 'AppDatabase'. When several nodes match, the call fails and lists their ids: call again with one of them.")
+
+private val DEPTH_ARG = mapOf("type" to "integer", "minimum" to 1, "maximum" to 10, "default" to 4, "description" to
+    "How many dependency steps to follow outwards: 1 lists only direct users; the default, 4, is enough for most changes.")
+
+/** How every tool behaves: it reads the project and changes nothing. */
+private const val READ_ONLY = "Read-only and local: it reads the source files, never runs Gradle or the app, and sends nothing anywhere."
+
+/** One tool. Every droidmap tool only reads the project, so all of them carry the same read-only annotations. */
+private fun tool(name: String, title: String, description: String, properties: Map<String, Any> = emptyMap(), required: List<String> = emptyList()) =
+    mapOf("name" to name, "title" to title, "description" to description,
+        "inputSchema" to buildMap { put("type", "object"); put("properties", properties); if (required.isNotEmpty()) put("required", required) },
+        "annotations" to mapOf("title" to title, "readOnlyHint" to true, "destructiveHint" to false, "idempotentHint" to true, "openWorldHint" to false))
 
 val TOOLS: List<Map<String, Any?>> = listOf(
-    mapOf("name" to "droidmap_check",
-        "description" to "Run droidmap's Android rules (Room migration paths, schema files, entities that no longer match the " +
-            "current version's schema so the version must be bumped, and migration tests; navigation " +
-            "targets with no destination and deep links no intent filter accepts; Hilt missing or duplicate bindings and the " +
-            "@HiltAndroidApp Application, @HiltViewModels got without Hilt's factory; WorkManager with Hilt, worker inputs; Koin " +
-            "definitions; components missing from the manifest, Intent extras no sender puts, notification channels never created; " +
-            "DataStores and Room databases built more than once; route properties without a NavType; Gradle module rules and cycles; " +
-            "manifest permission allowlist) and list the findings. droidmap_explain says how to fix one.",
-        "inputSchema" to mapOf("type" to "object", "properties" to mapOf(
-            "min_severity" to mapOf("type" to "string", "enum" to listOf("error", "warning", "info"),
-                "description" to "Only show findings this severe or worse (default: info).")))),
-    mapOf("name" to "droidmap_impact",
-        "description" to "Everything that depends on a node, transitively: who injects a class, which DAOs and databases use " +
-            "an entity, which screens use a ViewModel, which functions navigate to a destination, which modules depend on a " +
-            "module, and which tests cover it. Use before changing a class, entity, route or module.",
-        "inputSchema" to mapOf("type" to "object", "required" to listOf("node"), "properties" to mapOf(
-            "node" to NODE_ARG, "depth" to mapOf("type" to "integer", "minimum" to 1, "maximum" to 10, "default" to 4)))),
-    mapOf("name" to "droidmap_diff",
-        "description" to "What a change touches: the graph nodes whose code changed since a git ref (by default the uncommitted " +
-            "changes) and everything that depends on them (screens, destinations, ViewModels, Room, bindings, modules, tests), " +
-            "with the findings in the changed files. Use after editing, to see what to test.",
-        "inputSchema" to mapOf("type" to "object", "properties" to mapOf(
-            "base" to mapOf("type" to "string", "description" to "Git ref to compare with (default HEAD: the uncommitted changes)."),
-            "depth" to mapOf("type" to "integer", "minimum" to 1, "maximum" to 10, "default" to 4)))),
-    mapOf("name" to "droidmap_show",
-        "description" to "One node with its attributes, its direct dependencies and its direct users.",
-        "inputSchema" to mapOf("type" to "object", "required" to listOf("node"), "properties" to mapOf("node" to NODE_ARG))),
-    mapOf("name" to "droidmap_find",
-        "description" to "Search graph nodes (modules, Room entities/DAOs/databases/migrations, navigation destinations, " +
-            "screens, ViewModels, Hilt bindings, permissions) by id or name.",
-        "inputSchema" to mapOf("type" to "object", "required" to listOf("query"), "properties" to mapOf(
-            "query" to mapOf("type" to "string"), "limit" to mapOf("type" to "integer", "default" to 20)))),
-    mapOf("name" to "droidmap_report",
-        "description" to "A Markdown overview of the project: modules and their dependencies, Room databases with migration " +
-            "and test coverage, navigation destinations, Hilt bindings, findings.",
-        "inputSchema" to mapOf("type" to "object", "properties" to emptyMap<String, Any>())),
-    mapOf("name" to "droidmap_explain",
-        "description" to "Why a droidmap rule matters (the crash or data loss it prevents) and how to fix what it finds, with examples.",
-        "inputSchema" to mapOf("type" to "object", "required" to listOf("rule"), "properties" to mapOf(
-            "rule" to mapOf("type" to "string", "enum" to RULES.keys.toList())))),
+    tool("droidmap_check", "Check the Android wiring",
+        "Run droidmap's rules on the whole project and list what compiles but would crash or lose data at runtime: Room " +
+            "(missing or failing migrations, schema files out of date, untested migration steps), navigation (routes nothing " +
+            "registers, missing arguments, route types without a NavType, deep links no intent filter accepts), Hilt and Koin " +
+            "bindings, WorkManager setup and inputs, manifest components, permissions, Intent extras and notification channels, " +
+            "DataStores and databases built more than once, Gson and Moshi models that R8 renames, and Gradle module rules and cycles. " +
+            "Use it after editing to confirm nothing new broke; use droidmap_diff for what a change touches and droidmap_explain " +
+            "for how to fix a finding. $READ_ONLY Findings recorded in the project's droidmap-baseline.json are left out, with a " +
+            "note saying how many. Returns plain text: each finding's severity, rule id and file:line, then the problem, and a " +
+            "count by severity at the end; or \"No findings.\"",
+        mapOf("min_severity" to mapOf("type" to "string", "enum" to listOf("error", "warning", "info"), "default" to "info",
+            "description" to "Leave out findings less severe than this: 'error' lists only errors, 'warning' errors and " +
+                "warnings, 'info' (the default) everything."))),
+    tool("droidmap_impact", "What depends on this",
+        "List everything that depends on one node, transitively: who injects a class, which DAOs and databases use an entity, " +
+            "which screens use a ViewModel, which functions navigate to a destination, which modules depend on a module, and " +
+            "the test classes whose calls reach it. Use it before changing a class, entity, route, ViewModel, binding or module, " +
+            "to know what else to update and test; use droidmap_show for only the direct links in both directions, and " +
+            "droidmap_diff once the change is made. $READ_ONLY Returns plain text: the node and its file, then up to 200 " +
+            "dependents nearest first, each with its depth, kind, the edge it depends through and file:line, then the tests and " +
+            "modules affected; or \"Nothing in the graph depends on it.\"",
+        mapOf("node" to NODE_ARG, "depth" to DEPTH_ARG), listOf("node")),
+    tool("droidmap_diff", "What a change touches",
+        "Map a code change onto the graph: the declarations whose lines changed since a git ref (by default the uncommitted " +
+            "changes, new files included), the ones removed, everything that depends on them (screens, destinations, ViewModels, " +
+            "Room, bindings, modules), the test classes whose calls reach the changed code, and the findings in the changed " +
+            "files, including those only a comparison shows (a shipped Room schema or a stored enum constant changed, a Worker " +
+            "renamed). Use it after editing, to see what else to update and which tests to run; use droidmap_impact before " +
+            "editing. Read-only: it runs git diff and reads the source files, never runs Gradle, and changes nothing; the project " +
+            "must be in a git repository. Returns plain text in sections: Changed, Removed, Affected (grouped by kind), Tests that " +
+            "cover it, and Findings in the changed files.",
+        mapOf("base" to mapOf("type" to "string", "default" to "HEAD", "description" to
+            "The git ref to compare with: a branch, tag or commit, such as 'main', 'origin/main' or 'v1.2.0'. The default, " +
+                "'HEAD', compares the working tree with the last commit, so it shows the uncommitted changes. With a branch, " +
+                "droidmap compares with the point where the current branch left it."),
+            "depth" to DEPTH_ARG)),
+    tool("droidmap_show", "Show one node",
+        "Show one node of the graph: its kind, file:line and attributes (a destination's route and arguments, a database's " +
+            "version, a binding's qualifier), then the nodes it depends on directly and the nodes that use it directly, each " +
+            "with the edge kind and file:line. Use it to look closely at one class, entity, route or module; use droidmap_impact " +
+            "for everything that depends on it transitively, and droidmap_find when you do not know its name. $READ_ONLY " +
+            "Returns plain text.",
+        mapOf("node" to NODE_ARG), listOf("node")),
+    tool("droidmap_find", "Find nodes by name",
+        "Search the graph's nodes by id or name: modules, Room databases, entities, DAOs and migrations, navigation " +
+            "destinations and routes, screens, ViewModels, injectable classes, Hilt and Koin modules and bindings, components " +
+            "and permissions. Case is ignored; an exact name ranks first, then a name that starts with the text, then one that " +
+            "contains it. Use it to get the exact name or id that droidmap_impact and droidmap_show need when you know only part " +
+            "of it. $READ_ONLY Returns plain text, one node per line: name, kind and file:line (with the id when names repeat); " +
+            "or \"No node matches\".",
+        mapOf("query" to mapOf("type" to "string", "description" to
+            "The text to look for in node names and ids, such as 'Topic', 'UserDao', ':feature:home' or 'settings'."),
+            "limit" to mapOf("type" to "integer", "minimum" to 1, "maximum" to 200, "default" to 20,
+                "description" to "The most nodes to list (default 20).")),
+        listOf("query")),
+    tool("droidmap_report", "Project overview",
+        "Write a Markdown overview of the whole project: a summary, the modules and their dependencies, Room databases with " +
+            "their versions, migrations and test coverage, navigation destinations and how screens connect, dependency " +
+            "injection, permissions and the current findings, with Mermaid diagrams of the modules and the screen flow. Use it " +
+            "once to get oriented in an unfamiliar project; use droidmap_find, droidmap_show or droidmap_impact for one part. " +
+            "$READ_ONLY Takes no arguments. Returns Markdown, which can be long on a large project."),
+    tool("droidmap_explain", "Explain a rule",
+        "Explain one droidmap rule: what it finds, why it matters (the crash or data loss it prevents) and how to fix what it " +
+            "found, with code examples, and its page online. Use it when droidmap_check or droidmap_diff reports a finding you do " +
+            "not know how to fix. It reads documentation bundled with droidmap, so it needs no project and changes nothing. " +
+            "Returns Markdown.",
+        mapOf("rule" to mapOf("type" to "string", "enum" to RULES.keys.toList(), "description" to
+            "The rule's id, as each finding shows it, such as 'room-migration-path' or 'hilt-missing-binding'.")),
+        listOf("rule")),
 )
 
 private class ToolError(message: String) : Exception(message)
@@ -112,8 +154,10 @@ class McpServer(private val root: Path, private val configPath: Path? = null, pr
                         "protocolVersion" to (if (asked in PROTOCOL_VERSIONS) asked else PROTOCOL_VERSIONS[1]),
                         "capabilities" to mapOf("tools" to mapOf("listChanged" to false)),
                         "serverInfo" to mapOf("name" to "droidmap", "version" to VERSION),
-                        "instructions" to "droidmap answers Android structure questions from a static graph of this project. " +
-                            "Use droidmap_impact before changing an entity, route, ViewModel, binding or module, and droidmap_check after.")
+                        "instructions" to "droidmap answers Android structure questions from a static graph of this project, " +
+                            "rebuilt from the source files when they change. Use droidmap_impact before changing an entity, route, " +
+                            "ViewModel, binding or module, and droidmap_check and droidmap_diff after; droidmap_explain says how to " +
+                            "fix a finding, and droidmap_find gives the exact name when you know only part of it.")
                 }
                 method == "ping" -> emptyMap<String, Any>()
                 method == "tools/list" -> mapOf("tools" to TOOLS)
@@ -154,9 +198,12 @@ class McpServer(private val root: Path, private val configPath: Path? = null, pr
                 val base = (args["base"] as? String)?.trim()?.ifEmpty { null } ?: "HEAD"
                 if (!Git.isCommit(root, base)) throw ToolError("$base is not a commit in the git repository of $root")
                 val changes = try { readChanges(root, base) } catch (e: UsageError) { throw ToolError(e.message ?: "git diff failed") }
-                val all = runChecks(g, cfg)
+                // Built with the base, as the CLI's diff is, so the rules that compare with it run too (a shipped schema or
+                // enum constant changed, a Worker renamed). Only files changed since the last build are parsed again.
+                val atBase = buildGraph(Project(root, cfg), base, previous = built.code)
+                val all = runChecks(atBase.graph, cfg)
                 val findings = baseline()?.apply(all)?.findings ?: all
-                return formatDiff(diffReport(built, changes, findings, ((args["depth"] as? Number)?.toInt() ?: 4).coerceIn(1, 10)), markdown = false)
+                return formatDiff(diffReport(atBase, changes, findings, ((args["depth"] as? Number)?.toInt() ?: 4).coerceIn(1, 10)), markdown = false)
             }
             "droidmap_check" -> {
                 val floor = SEVERITY_ORDER[args["min_severity"] as? String ?: "info"] ?: 2
@@ -171,7 +218,7 @@ class McpServer(private val root: Path, private val configPath: Path? = null, pr
             "droidmap_find" -> {
                 val q = (args["query"] as? String)?.trim().orEmpty()
                 if (q.isEmpty()) throw ToolError("query is required")
-                val hits = findNodes(g, q, (args["limit"] as? Number)?.toInt() ?: 20)
+                val hits = findNodes(g, q, ((args["limit"] as? Number)?.toInt() ?: 20).coerceIn(1, 200))
                 if (hits.isEmpty()) return "No node matches '$q'."
                 return formatFind(hits)
             }
