@@ -1,13 +1,12 @@
 # Changelog
 
-## Unreleased
+## 0.4.0 (2026-11-18)
 
 - New rules for code that compiles but fails at runtime: `component-not-in-manifest` (an activity, service or receiver the code sends an explicit Intent to that no manifest declares: `ActivityNotFoundException`), `hilt-viewmodel-factory` (a `@HiltViewModel` got with `viewModel()` in a navigation destination, `by viewModels()` outside an `@AndroidEntryPoint`, or `by navGraphViewModels()`: "Cannot create an instance of class"), `datastore-duplicate-file` (two DataStores on one file, or one built in a provider that is not a singleton), `room-database-not-singleton`, `nav-route-type-unsupported` (a type-safe route property with no NavType and no `typeMap`), `notification-channel-missing` (a notification for a channel the app never creates: not shown from Android 8), and `intent-extra-missing` and `worker-input-missing` (an extra or a worker input read under a key no sender puts: always null).
 - Rules that compare with `--base` (as the GitHub Action does on pull requests), for what users of the last release have saved: `room-enum-constant-removed` (an enum constant removed while Room stores the enum by name: those rows crash when read) and `workmanager-worker-renamed` (a Worker renamed while users have its periodic work saved: it fails every time). `diff` now compares with its base too, so its findings include these and `room-schema-changed`.
 - The Claude Code plugin has hooks: when Claude is about to finish, droidmap checks the project, and if the session's changes added an error, Claude is told which and fixes it before finishing. Findings from before the session are left alone.
 - An eval suite for the Claude Code plugin (`plugin/evals`, run with `claude plugin eval`): adding a Room column was fully correct in 3 of 3 runs with the plugin and 0 of 3 without it. The launcher runs a local build with `DROIDMAP_JAR`.
 - `droidmap mcp --http PORT` serves MCP over HTTP on 127.0.0.1, for Gemini in Android Studio, which supports only HTTP servers. Requests from a web page of another origin are refused.
-
 - New rule `room-migration-sql` (error): each manual migration's SQL is replayed on the schema files of the version it starts from and compared with the version it ends at, the way Room checks after migrating (columns, `NOT NULL`, primary keys, defaults, foreign keys, indices, FTS tables, views). It reports statements SQLite refuses (a `NOT NULL` column without a default, a missing table), tables that do not match (Room's "Migration didn't properly handle" crash), several statements in one `execSQL` (Android runs only the first), and `RENAME COLUMN`/`DROP COLUMN` below Android 11/14 when `minSdk` is lower. SQL in `"""...""".trimIndent()` and `.trimMargin()` is read as a constant now.
 - New rule `nav-argument-missing` (warning): a ViewModel that reads a `SavedStateHandle` key (`savedStateHandle["topicId"]`) that no destination showing it has as an argument (`topic/{id}`), so the value is always null. Destinations now list their arguments in the graph: string routes, type-safe route classes and XML `<argument>`s.
 - New rule `moshi-model-not-kept` (warning): like `gson-model-not-kept`, for Moshi without code generation (`moshi.adapter(X::class.java)`, Retrofit with `MoshiConverterFactory`).
@@ -16,6 +15,7 @@
 - `diff` says when no test class reaches the changed code ("Tests that cover it: none found"), so an empty list is not read as "not checked".
 - The GitHub Action checks the SHA-256 of the droidmap release it downloads, as the installers do.
 - The Windows installer (`install.ps1`) refused every release since 0.2.0 with "the download does not match its checksum". Fixed (on main, which the install command downloads from).
+- The Gradle plugin is on the [Gradle Plugin Portal](https://plugins.gradle.org/plugin/io.github.hussainshirazi.droidmap).
 
 ## 0.3.0 (2026-11-12)
 

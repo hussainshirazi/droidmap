@@ -68,7 +68,10 @@ jobs:
           ./mcp-publisher publish || { echo "::warning::The MCP Registry did not take droidmap $version (is the ghcr.io package public?)"; exit 1; }
       # The Gradle Plugin Portal needs an API key of the account that owns io.github.hussainshirazi (repository
       # secrets GRADLE_PUBLISH_KEY and GRADLE_PUBLISH_SECRET); without them the plugin is not published.
+      # A failure here leaves the steps after it (the packages pull request, the installer tests) to run;
+      # publish again with gradle-plugin.yml.
       - name: Publish the Gradle plugin
+        continue-on-error: true
         env:
           GRADLE_PUBLISH_KEY: ${{ secrets.GRADLE_PUBLISH_KEY }}
           GRADLE_PUBLISH_SECRET: ${{ secrets.GRADLE_PUBLISH_SECRET }}
@@ -76,7 +79,8 @@ jobs:
           if [ -z "$GRADLE_PUBLISH_KEY" ]; then
             echo "::notice::No GRADLE_PUBLISH_KEY secret, so the Gradle plugin is not published"; exit 0
           fi
-          ./gradlew -p gradle-plugin test publishPlugins -Pversion="${GITHUB_REF_NAME#v}"
+          ./gradlew -p gradle-plugin test publishPlugins -Pversion="${GITHUB_REF_NAME#v}" ||
+            { echo "::warning::The Gradle plugin was not published: run gradle-plugin.yml for $GITHUB_REF_NAME"; exit 1; }
       # main takes changes through pull requests only, so the update goes to a branch and a pull request.
       # (Creating it needs Settings > Actions > "Allow GitHub Actions to create and approve pull requests";
       # without that, the job summary has the link to open it by hand.)
