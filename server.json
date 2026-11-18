@@ -19,7 +19,7 @@
       ]
     }
   ],
-  "version": "0.4.0",
+  "version": "0.4.1",
   "repository": {
     "url": "https://github.com/hussainshirazi/droidmap",
     "source": "github"
@@ -28,7 +28,7 @@
   "packages": [
     {
       "registryType": "oci",
-      "identifier": "ghcr.io/hussainshirazi/droidmap:0.4.0",
+      "identifier": "ghcr.io/hussainshirazi/droidmap:0.4.1",
       "transport": {
         "type": "stdio"
       },
